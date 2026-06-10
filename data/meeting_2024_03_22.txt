@@ -1,0 +1,20 @@
+Meeting Title: Mobile App Launch Review
+Date: 2024-03-22
+Participants: Rahul, Amit, Neha, Sarah
+
+Rahul confirmed the mobile app is now ready for launch after the April delay decision in January.
+
+Neha presented the QA report — 3 critical bugs were found and fixed. Performance on Android is 20% slower than iOS.
+
+Decision: Launch on iOS first on April 5th. Android launch to follow in 6 weeks after performance optimization.
+
+Amit committed to fixing the Android performance issues by May 1st.
+
+The pricing model was discussed. Rahul proposed a freemium model with a $9/month pro tier.
+
+Decision: Go with freemium. Neha will set up the payment integration with Stripe by April 1st.
+
+Action Items:
+- Neha: Stripe payment integration by April 1
+- Amit: Android performance fix by May 1
+- Sarah: Launch announcement blog post by April 3

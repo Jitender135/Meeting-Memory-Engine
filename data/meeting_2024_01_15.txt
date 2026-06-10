@@ -1,0 +1,18 @@
+Meeting Title: Q1 Product Planning
+Date: 2024-01-15
+Participants: Rahul, Priya, Amit, Sarah
+
+Rahul opened the meeting by reviewing the Q4 results. Revenue was up 18% but user retention dropped by 5%.
+
+Priya suggested we prioritize the onboarding flow redesign in Q1. The current drop-off rate at step 3 is 40% which is too high.
+
+Amit agreed and committed to delivering a new onboarding prototype by February 10th.
+
+Decision: The team decided to delay the mobile app launch from February to April to focus on retention first.
+
+Sarah will set up weekly retention tracking dashboards by January 22nd.
+
+Action Items:
+- Amit: Onboarding prototype by Feb 10
+- Sarah: Retention dashboard by Jan 22
+- Priya: User interviews with 10 churned users by Jan 30

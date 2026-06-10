@@ -1,0 +1,23 @@
+Meeting Title: Mid-Year Strategy Review
+Date: 2024-06-10
+Participants: Rahul, Priya, Amit, Neha, Sarah
+
+Rahul opened with the mid-year numbers. iOS app crossed 10,000 downloads. Pro conversion rate is 4.2%.
+
+Priya raised concern that the pro conversion rate is below the 6% target. Recommended adding a 14-day free trial.
+
+Decision: Add 14-day free trial to the pro tier. Neha to implement by June 30.
+
+The team reviewed the Android launch from May. Android retention at 30 days is 28% vs iOS at 41%.
+
+Amit proposed a complete rewrite of the Android app in React Native to unify the codebase.
+
+Decision: Approve React Native rewrite. Timeline is 3 months starting July 1st.
+
+Rahul announced a new partnership with Notion for integration. Details to be shared next week.
+
+Action Items:
+- Neha: 14-day free trial by June 30
+- Amit: Begin React Native rewrite July 1
+- Priya: Competitive analysis of freemium models by June 20
+- Rahul: Share Notion partnership details by June 17

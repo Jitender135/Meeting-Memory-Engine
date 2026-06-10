@@ -1,0 +1,19 @@
+# Environment
+.env
+venv/
+
+# ChromaDB — vector DB lives locally, not on GitHub
+chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
