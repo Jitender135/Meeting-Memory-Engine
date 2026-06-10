@@ -1,72 +1,171 @@
-import os
-import sys
+"""
+ingest.py — Multi-format transcript ingestion pipeline.
+
+Supported formats:
+    .txt  — plain text transcripts
+    .pdf  — Zoom/Google Meet PDF exports (via PyMuPDF)
+    .docx — Word meeting notes (via python-docx)
+
+Design decision — why format-specific loaders over LangChain's generic ones:
+    LangChain's generic loaders lose metadata and formatting context.
+    Format-specific extraction gives us clean text we can reliably
+    parse for meeting title, date, and participants.
+"""
+
+import fitz  # PyMuPDF
+import chromadb
+
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
-
-from langchain_community.document_loaders import TextLoader
+from docx import Document as DocxDocument
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-import chromadb
 
-# ── Load environment ──────────────────────────────────────────────
+# ── Environment ───────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ── Constants ─────────────────────────────────────────────────────
-CHROMA_PATH = Path(__file__).resolve().parents[2] / "chroma_db"
-DATA_PATH   = Path(__file__).resolve().parents[2] / "data"
+CHROMA_PATH   = Path(__file__).resolve().parents[2] / "chroma_db"
+DATA_PATH     = Path(__file__).resolve().parents[2] / "data"
+CHUNK_SIZE    = 500
+CHUNK_OVERLAP = 50
+SUPPORTED     = {".txt", ".pdf", ".docx"}
 
-CHUNK_SIZE    = 500   # ~375 words — fits one meeting topic cleanly
-CHUNK_OVERLAP = 50    # 10% overlap — prevents decisions split at edges
+
+# ─────────────────────────────────────────────────────────────────
+# FORMAT-SPECIFIC TEXT EXTRACTORS
+# ─────────────────────────────────────────────────────────────────
+
+def extract_txt(file_path: Path) -> str:
+    """Read plain text transcript."""
+    return file_path.read_text(encoding="utf-8")
 
 
-def extract_metadata(filename: str) -> dict:
+def extract_pdf(file_path: Path) -> str:
     """
-    Pull meeting date from filename like meeting_2024_01_15.txt
-    and return structured metadata dict.
+    Extract text from PDF using PyMuPDF.
+    Why PyMuPDF over pdfplumber or PyPDF2:
+      - Fastest parser available in Python
+      - Preserves reading order better than alternatives
+      - Handles scanned PDFs with embedded text layers
     """
-    stem = Path(filename).stem  # meeting_2024_01_15
-    parts = stem.split("_")     # ['meeting', '2024', '01', '15']
+    doc   = fitz.open(str(file_path))
+    pages = [page.get_text("text") for page in doc]
+    doc.close()
+    return "\n".join(pages).strip()
+
+
+def extract_docx(file_path: Path) -> str:
+    """
+    Extract text from DOCX paragraph by paragraph.
+    Why not use LangChain's Docx2txtLoader:
+      - Docx2txt strips paragraph boundaries, losing structure
+      - python-docx preserves paragraph order and empty lines,
+        which our chunker uses as semantic split points
+    """
+    doc        = DocxDocument(str(file_path))
+    paragraphs = [p.text for p in doc.paragraphs]
+    return "\n".join(paragraphs).strip()
+
+
+# ─────────────────────────────────────────────────────────────────
+# METADATA EXTRACTION
+# ─────────────────────────────────────────────────────────────────
+
+def extract_metadata(file_path: Path) -> dict:
+    """
+    Pull structured metadata from filename and file content.
+
+    Primary strategy  — parse date from filename: meeting_YYYY_MM_DD.*
+    Fallback strategy — timestamp 0 (chunk still ingested, just unfiltered)
+
+    Why store as both string and integer:
+      - meeting_date (string) → displayed in UI citations
+      - meeting_timestamp (int) → used for ChromaDB $gte/$lte filtering
+        because ChromaDB where clauses only support numeric comparisons
+    """
+    stem  = file_path.stem   # e.g. meeting_2024_08_15
+    parts = stem.split("_")
 
     try:
-        date_str = f"{parts[1]}-{parts[2]}-{parts[3]}"
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        timestamp = int(date_obj.timestamp())  # ChromaDB filters on integers
+        date_str  = f"{parts[1]}-{parts[2]}-{parts[3]}"
+        date_obj  = datetime.strptime(date_str, "%Y-%m-%d")
+        timestamp = int(date_obj.timestamp())
     except (IndexError, ValueError):
         date_str  = "unknown"
         timestamp = 0
 
     return {
-        "meeting_date": date_str,
+        "meeting_date":      date_str,
         "meeting_timestamp": timestamp,
-        "source_file": filename,
+        "source_file":       file_path.name,
+        "file_format":       file_path.suffix.lstrip("."),
     }
 
 
-def load_and_enrich(file_path: Path) -> list:
+def extract_title(raw_text: str) -> str:
     """
-    Load a single transcript, attach metadata to every document chunk.
+    Pull meeting title from the first non-empty line of the transcript.
+    Works across TXT, PDF, and DOCX since all follow the same header format.
     """
-    loader   = TextLoader(str(file_path), encoding="utf-8")
-    docs     = loader.load()
-    metadata = extract_metadata(file_path.name)
-
-    # Read the first line to extract the meeting title
-    first_line = docs[0].page_content.split("\n")[0] if docs else ""
-    metadata["title"] = first_line.replace("Meeting Title:", "").strip()
-
-    for doc in docs:
-        doc.metadata.update(metadata)
-
-    return docs
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if line:
+            return line.replace("Meeting Title:", "").strip()
+    return "Untitled Meeting"
 
 
-def chunk_documents(docs: list) -> list:
+# ─────────────────────────────────────────────────────────────────
+# DOCUMENT LOADING
+# ─────────────────────────────────────────────────────────────────
+
+def load_file(file_path: Path) -> Document | None:
     """
-    Split documents into chunks.
-    Why RecursiveCharacterTextSplitter:
-      - Tries to split on paragraphs first, then sentences, then words
-      - Preserves semantic boundaries better than a naive character split
+    Load a single file into a LangChain Document object.
+    Returns None if the format is unsupported or extraction fails.
+    """
+    suffix = file_path.suffix.lower()
+
+    if suffix not in SUPPORTED:
+        print(f"  Skipping unsupported format: {file_path.name}")
+        return None
+
+    try:
+        if suffix == ".txt":
+            raw_text = extract_txt(file_path)
+        elif suffix == ".pdf":
+            raw_text = extract_pdf(file_path)
+        elif suffix == ".docx":
+            raw_text = extract_docx(file_path)
+
+        if not raw_text.strip():
+            print(f"  Skipping empty file: {file_path.name}")
+            return None
+
+        metadata          = extract_metadata(file_path)
+        metadata["title"] = extract_title(raw_text)
+
+        return Document(page_content=raw_text, metadata=metadata)
+
+    except Exception as e:
+        print(f"  Error loading {file_path.name}: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────
+# CHUNKING
+# ─────────────────────────────────────────────────────────────────
+
+def chunk_documents(docs: list[Document]) -> list[Document]:
+    """
+    Split documents into chunks preserving metadata on every chunk.
+
+    Why RecursiveCharacterTextSplitter with these separators:
+      Tries splits in order: paragraph → newline → sentence → word
+      This preserves semantic boundaries — a decision or action item
+      stays in one chunk rather than being split mid-sentence.
     """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -76,10 +175,17 @@ def chunk_documents(docs: list) -> list:
     return splitter.split_documents(docs)
 
 
-def get_embedding_function():
+# ─────────────────────────────────────────────────────────────────
+# EMBEDDING
+# ─────────────────────────────────────────────────────────────────
+
+def get_embedding_function() -> HuggingFaceEmbeddings:
     """
-    Use a free local HuggingFace model for embeddings.
-    No API key needed — runs entirely on your machine.
+    Local HuggingFace embedding model — no API key, no cost, runs on CPU.
+    all-MiniLM-L6-v2 is the standard choice for semantic search:
+      - 384-dimension vectors (compact, fast)
+      - Strong performance on retrieval benchmarks
+      - Downloads once, cached locally after first run
     """
     return HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2",
@@ -87,42 +193,62 @@ def get_embedding_function():
     )
 
 
+# ─────────────────────────────────────────────────────────────────
+# MAIN INGEST FUNCTION
+# ─────────────────────────────────────────────────────────────────
+
 def ingest_all(data_path: Path = DATA_PATH) -> dict:
     """
-    Main ingest function:
-    1. Load all .txt transcripts from data/
-    2. Enrich with metadata
-    3. Chunk
-    4. Embed and store in ChromaDB
+    Full ingest pipeline:
+      1. Discover all supported files in data/
+      2. Extract text per format (TXT / PDF / DOCX)
+      3. Attach metadata (date, title, format, source file)
+      4. Chunk with overlap
+      5. Embed with HuggingFace all-MiniLM-L6-v2
+      6. Upsert into ChromaDB (safe to re-run — no duplicates)
+
+    Returns a summary dict consumed by FastAPI's /ingest endpoint.
     """
-    txt_files = list(data_path.glob("*.txt"))
-    if not txt_files:
-        return {"status": "error", "message": "No .txt files found in data/"}
+    # ── Discover files ────────────────────────────────────────────
+    all_files = [
+        f for f in data_path.iterdir()
+        if f.is_file() and f.suffix.lower() in SUPPORTED
+    ]
 
-    print(f"Found {len(txt_files)} transcript(s). Starting ingest...")
+    if not all_files:
+        return {
+            "status":  "error",
+            "message": f"No supported files found in {data_path}. "
+                       f"Supported formats: {', '.join(SUPPORTED)}",
+        }
 
-    # Load and enrich all files
+    print(f"Found {len(all_files)} file(s). Starting ingest...")
+
+    # ── Load all files ────────────────────────────────────────────
     all_docs = []
-    for f in txt_files:
-        docs = load_and_enrich(f)
-        all_docs.extend(docs)
-        print(f"  Loaded: {f.name} ({len(docs)} doc(s))")
+    for f in sorted(all_files):
+        doc = load_file(f)
+        if doc:
+            all_docs.append(doc)
+            fmt = f.suffix.upper().lstrip(".")
+            print(f"  [{fmt}] Loaded: {f.name} — {doc.metadata['title']}")
 
-    # Chunk all documents
+    if not all_docs:
+        return {"status": "error", "message": "All files failed to load."}
+
+    # ── Chunk ─────────────────────────────────────────────────────
     chunks = chunk_documents(all_docs)
-    print(f"  Total chunks created: {len(chunks)}")
+    print(f"  Total chunks: {len(chunks)}")
 
-    # Set up ChromaDB client (persists to disk automatically)
+    # ── Embed + store ─────────────────────────────────────────────
     client     = chromadb.PersistentClient(path=str(CHROMA_PATH))
     collection = client.get_or_create_collection(
         name="meeting_transcripts",
-        metadata={"hnsw:space": "cosine"},  # cosine similarity for text
+        metadata={"hnsw:space": "cosine"},
     )
 
-    # Get embedding function
     embed_fn = get_embedding_function()
 
-    # Embed and upsert chunks into ChromaDB
     for i, chunk in enumerate(chunks):
         embedding = embed_fn.embed_query(chunk.page_content)
         collection.upsert(
@@ -133,11 +259,13 @@ def ingest_all(data_path: Path = DATA_PATH) -> dict:
         )
 
     print(f"  Ingested {len(chunks)} chunks into ChromaDB.")
+
     return {
-        "status":      "success",
-        "files":       len(txt_files),
-        "chunks":      len(chunks),
-        "collection":  "meeting_transcripts",
+        "status":     "success",
+        "files":      len(all_docs),
+        "chunks":     len(chunks),
+        "collection": "meeting_transcripts",
+        "formats":    list({f.suffix.lstrip(".") for f in all_files}),
     }
 
 
