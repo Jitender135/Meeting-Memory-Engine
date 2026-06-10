@@ -120,3 +120,30 @@ class HealthResponse(BaseModel):
     """
     status:   str = Field(description="'ok' if service is running.")
     pipeline: str = Field(description="'ready' if ChromaDB collection exists.")
+
+class ActionItem(BaseModel):
+    """A single extracted action item from retrieved meeting chunks."""
+    owner:  str = Field(description="Person responsible for the action item.")
+    task:   str = Field(description="What needs to be done.")
+    due:    str = Field(description="Due date or deadline. 'Not specified' if absent.")
+    meeting: str = Field(description="Meeting title this action item came from.")
+    date:   str = Field(description="Meeting date.")
+
+
+class ActionItemsRequest(BaseModel):
+    """Payload for POST /action-items"""
+    question: str = Field(
+        ...,
+        min_length=5,
+        max_length=500,
+        description="Topic or question to extract action items for.",
+        examples=["What action items were assigned in the engineering sprint?"],
+    )
+    date_from: Optional[date] = Field(default=None)
+    date_to:   Optional[date] = Field(default=None)
+
+
+class ActionItemsResponse(BaseModel):
+    """Response payload for POST /action-items"""
+    action_items: list[ActionItem] = Field(description="Extracted action items.")
+    sources:      list[SourceDocument] = Field(description="Meetings searched.")

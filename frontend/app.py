@@ -268,6 +268,50 @@ div[data-testid="column"]:last-child .stButton > button {
     border-radius: 4px;
     background: #0d1232;
 }
+            
+/* ── Action items table ── */
+.action-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 4px;
+}
+.action-table th {
+    font-size: 10px;
+    font-weight: 600;
+    color: #333333;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #1a1a1a;
+}
+.action-table td {
+    font-size: 13px;
+    color: #cccccc;
+    padding: 10px 12px;
+    border-bottom: 1px solid #141414;
+    vertical-align: top;
+    line-height: 1.5;
+}
+.action-table tr:last-child td { border-bottom: none; }
+.owner-cell {
+    font-weight: 500;
+    color: #ffffff;
+    white-space: nowrap;
+}
+.due-cell {
+    color: #555555;
+    font-size: 12px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.action-wrap {
+    background: #0f0f0f;
+    border: 1px solid #1a1a1a;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 4px;
+}            
 
 /* ── Empty state ── */
 .empty-wrap {
@@ -351,6 +395,18 @@ def api_query(question: str, date_from=None, date_to=None, top_k=3) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
+
+def api_action_items(question: str, date_from=None, date_to=None) -> dict:
+    payload = {"question": question}
+    if date_from:
+        payload["date_from"] = str(date_from)
+    if date_to:
+        payload["date_to"] = str(date_to)
+    try:
+        r = httpx.post(f"{API_BASE}/action-items", json=payload, timeout=30)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 def api_ingest() -> dict:
     try:
@@ -510,6 +566,50 @@ if st.session_state.last_result:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+        # ── Action items ──────────────────────────────────────────
+        st.markdown('<span class="sources-label">Action Items</span>', unsafe_allow_html=True)
+        with st.spinner("Extracting action items..."):
+            ai_result = api_action_items(
+                question=st.session_state.last_question,
+                date_from=date_from if use_filter else None,
+                date_to=date_to     if use_filter else None,
+            )
+
+        raw_items = ai_result.get("action_items", [])
+seen = set()
+items = []
+for item in raw_items:
+    key = (item.get("owner", ""), item.get("task", "")[:30])
+    if key not in seen:
+        seen.add(key)
+        items.append(item)
+        if items:
+            rows = ""
+            for item in items:
+                rows += (
+                    f'<tr>'
+                    f'<td class="owner-cell">{item.get("owner", "—")}</td>'
+                    f'<td>{item.get("task", "—")}</td>'
+                    f'<td class="due-cell">{item.get("due", "—")}</td>'
+                    f'<td class="due-cell">{item.get("meeting", "—")}</td>'
+                    f'</tr>'
+                )
+            st.markdown(
+                f'<div class="action-wrap">'
+                f'<table class="action-table">'
+                f'<thead><tr>'
+                f'<th>Owner</th><th>Task</th><th>Due</th><th>Meeting</th>'
+                f'</tr></thead>'
+                f'<tbody>{rows}</tbody>'
+                f'</table></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="font-size:13px;color:#333333;padding:12px 0;">No action items found for this query.</div>',
+                unsafe_allow_html=True,
+            )
 
 else:
     st.markdown("""

@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pipeline.retriever import query as rag_query, extract_action_items
 
 from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
 from pipeline.retriever import query as rag_query
@@ -34,6 +35,9 @@ from models import (
     MeetingsResponse,
     MeetingMeta,
     HealthResponse,
+    ActionItem,
+    ActionItemsRequest,
+    ActionItemsResponse,
 )
 
 # ── Environment ───────────────────────────────────────────────────
@@ -212,5 +216,40 @@ def query_meetings(request: QueryRequest) -> QueryResponse:
 
     return QueryResponse(
         answer=result["answer"],
+        sources=[SourceDocument(**s) for s in result["sources"]],
+    )
+
+# ─────────────────────────────────────────────────────────────────
+# POST /action-items
+# ─────────────────────────────────────────────────────────────────
+@app.post(
+    "/action-items",
+    response_model=ActionItemsResponse,
+    summary="Extract structured action items from meetings",
+    tags=["Pipeline"],
+)
+def get_action_items(request: ActionItemsRequest) -> ActionItemsResponse:
+    """
+    Retrieves relevant meeting chunks and runs a focused LLM call
+    to extract structured action items — owner, task, due date, source.
+
+    Why a separate endpoint from /query:
+        Action item extraction uses a different prompt and returns
+        structured JSON. Combining with /query degrades both outputs.
+    """
+    try:
+        result = extract_action_items(
+            question=request.question,
+            date_from=str(request.date_from) if request.date_from else None,
+            date_to=str(request.date_to)     if request.date_to   else None,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Extraction error: {str(e)}",
+        )
+
+    return ActionItemsResponse(
+        action_items=[ActionItem(**item) for item in result["action_items"]],
         sources=[SourceDocument(**s) for s in result["sources"]],
     )

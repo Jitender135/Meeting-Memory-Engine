@@ -176,3 +176,124 @@ if __name__ == "__main__":
     )
     print("Answer:", result["answer"])
     print("Sources:", result["sources"])
+
+# ─────────────────────────────────────────────────────────────────
+# ACTION ITEM EXTRACTOR
+# ─────────────────────────────────────────────────────────────────
+
+ACTION_ITEM_PROMPT = """
+You are a precise meeting assistant that extracts action items from meeting transcripts.
+
+Given the meeting context below, extract ALL action items mentioned.
+For each action item return ONLY a JSON array in this exact format — no preamble, no explanation:
+
+[
+  {{"owner": "Person Name", "task": "What they need to do", "due": "Due date or Not specified", "meeting": "Meeting title", "date": "YYYY-MM-DD"}},
+  ...
+]
+
+If no action items are found, return an empty array: []
+
+Meeting context:
+{context}
+"""
+
+
+def extract_action_items(
+    question:  str,
+    date_from: str = None,
+    date_to:   str = None,
+) -> dict:
+    """
+    Extract structured action items from meeting transcripts.
+
+    Two-step process:
+      1. Retrieve relevant chunks (same temporal RAG as query())
+      2. Run a second focused LLM call with a structured output prompt
+         that forces JSON — no free-form text
+
+    Why a separate LLM call instead of combining with query():
+      Action item extraction needs a different prompt and output format.
+      Mixing summarisation + structured extraction in one prompt degrades
+      quality on both tasks. Two focused calls beats one confused call.
+    """
+    # ── Step 1: Retrieve relevant chunks ─────────────────────────
+    embed_fn  = get_embedding_function()
+    query_vec = embed_fn.embed_query(question)
+
+    where_filter = None
+    if date_from or date_to:
+        from datetime import datetime
+        conditions = []
+        if date_from:
+            ts = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$gte": ts}})
+        if date_to:
+            ts = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$lte": ts}})
+        where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+
+    client     = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    collection = client.get_collection("meeting_transcripts")
+
+    results = collection.query(
+        query_embeddings=[query_vec],
+        n_results=4,
+        where=where_filter,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    chunks = [
+        {
+            "document": results["documents"][0][i],
+            "metadata": results["metadatas"][0][i],
+            "score":    round(1 - results["distances"][0][i], 3),
+        }
+        for i in range(len(results["documents"][0]))
+    ]
+
+    if not chunks:
+        return {"action_items": [], "sources": []}
+
+    # ── Step 2: Build context and extract action items ────────────
+    context = build_context(chunks)
+
+    llm      = get_llm()
+    response = llm.invoke(ACTION_ITEM_PROMPT.format(context=context))
+
+    # ── Step 3: Parse JSON response safely ────────────────────────
+    import json
+    import re
+
+    raw = response.content.strip()
+
+    # Strip markdown code fences if LLM wraps output in ```json ... ```
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$",          "", raw)
+
+    try:
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            items = []
+    except json.JSONDecodeError:
+        items = []
+
+    sources = [
+        {
+            "title": c["metadata"].get("title", "Unknown"),
+            "date":  c["metadata"].get("meeting_date", "Unknown"),
+            "score": c["score"],
+        }
+        for c in chunks
+    ]
+
+    return {"action_items": items, "sources": sources}
+
+
+# ── Test directly ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("\n=== Action Item Extraction Test ===")
+    result = extract_action_items("What action items were assigned?")
+    print(f"Found {len(result['action_items'])} action items:")
+    for item in result["action_items"]:
+        print(f"  - [{item.get('owner')}] {item.get('task')} (due: {item.get('due')})")
