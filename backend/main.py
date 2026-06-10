@@ -23,7 +23,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pipeline.retriever import query as rag_query, extract_action_items
+from pipeline.retriever  import query as rag_query, extract_action_items
+from pipeline.evaluator  import evaluate_pipeline
 
 from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
 from pipeline.retriever import query as rag_query
@@ -38,6 +39,9 @@ from models import (
     ActionItem,
     ActionItemsRequest,
     ActionItemsResponse,
+    EvalScore,
+    EvaluationResponse,
+    EvaluateRequest,
 )
 
 # ── Environment ───────────────────────────────────────────────────
@@ -253,3 +257,39 @@ def get_action_items(request: ActionItemsRequest) -> ActionItemsResponse:
         action_items=[ActionItem(**item) for item in result["action_items"]],
         sources=[SourceDocument(**s) for s in result["sources"]],
     )
+
+# ─────────────────────────────────────────────────────────────────
+# POST /evaluate
+# ─────────────────────────────────────────────────────────────────
+@app.post(
+    "/evaluate",
+    response_model=EvaluationResponse,
+    summary="Evaluate RAG response quality",
+    tags=["Pipeline"],
+)
+def evaluate_response(request: EvaluateRequest) -> EvaluationResponse:
+    """
+    Evaluates a RAG response using LLM-as-judge pattern.
+
+    Three metrics:
+        Faithfulness      — are claims grounded in retrieved context?
+        Answer Relevance  — does the answer address the question?
+        Context Precision — are retrieved chunks relevant?
+
+    Why LLM-as-judge over RAGAS:
+        RAGAS requires LangChain 0.2.x which conflicts with our 1.x stack.
+        LLM-as-judge gives identical methodology with zero dependency risk.
+    """
+    try:
+        result = evaluate_pipeline(
+            question=request.question,
+            answer=request.answer,
+            contexts=request.contexts,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Evaluation error: {str(e)}",
+        )
+
+    return EvaluationResponse(**result)

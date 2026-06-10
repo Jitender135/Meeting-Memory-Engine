@@ -313,6 +313,47 @@ div[data-testid="column"]:last-child .stButton > button {
     margin-top: 4px;
 }            
 
+/* ── Eval scores ── */
+.eval-wrap {
+    background: #0f0f0f;
+    border: 1px solid #1a1a1a;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-top: 4px;
+}
+.eval-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #141414;
+}
+.eval-row:last-child { border-bottom: none; }
+.eval-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #888888;
+}
+.eval-reason {
+    font-size: 11px;
+    color: #444444;
+    margin-top: 2px;
+    max-width: 480px;
+}
+.eval-score-high { color: #22c55e; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.eval-score-mid  { color: #f59e0b; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.eval-score-low  { color: #ef4444; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.overall-score {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #1a1a1a;
+}
+.overall-label { font-size: 11px; font-weight: 600; color: #555555; text-transform: uppercase; letter-spacing: 0.08em; }
+.overall-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
 /* ── Empty state ── */
 .empty-wrap {
     padding: 24px 0 32px;
@@ -411,6 +452,17 @@ def api_action_items(question: str, date_from=None, date_to=None) -> dict:
 def api_ingest() -> dict:
     try:
         r = httpx.post(f"{API_BASE}/ingest", timeout=60)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+    
+def api_evaluate(question: str, answer: str, contexts: list) -> dict:
+    try:
+        r = httpx.post(
+            f"{API_BASE}/evaluate",
+            json={"question": question, "answer": answer, "contexts": contexts},
+            timeout=30,
+        )
         return r.json()
     except Exception as e:
         return {"error": str(e)}
@@ -601,6 +653,60 @@ if st.session_state.last_result:
         else:
             st.markdown(
                 '<div style="font-size:13px;color:#333333;padding:12px 0;">No action items found for this query.</div>',
+                unsafe_allow_html=True,
+            )
+        
+# ── Evaluation scores ─────────────────────────────────────
+        st.markdown('<span class="sources-label">Pipeline Quality</span>', unsafe_allow_html=True)
+        with st.spinner("Evaluating response quality..."):
+            contexts = [s.get("excerpt", s.get("title", "")) for s in result.get("sources", [])]
+            eval_result = api_evaluate(
+                question=st.session_state.last_question,
+                answer=result["answer"],
+                contexts=contexts,
+            )
+
+        if "error" not in eval_result and eval_result.get("status") == "success":
+            overall = eval_result.get("overall", 0)
+            overall_class = (
+                "eval-score-high" if overall >= 0.7
+                else "eval-score-mid" if overall >= 0.4
+                else "eval-score-low"
+            )
+
+            metrics = [
+                ("Faithfulness",      eval_result.get("faithfulness",      {})),
+                ("Answer Relevance",  eval_result.get("answer_relevancy",  {})),
+                ("Context Precision", eval_result.get("context_precision", {})),
+            ]
+
+            rows = ""
+            for label, m in metrics:
+                score = m.get("score", 0)
+                reason = m.get("reason", "")
+                score_class = (
+                    "eval-score-high" if score >= 0.7
+                    else "eval-score-mid" if score >= 0.4
+                    else "eval-score-low"
+                )
+                rows += (
+                    f'<div class="eval-row">'
+                    f'  <div>'
+                    f'    <div class="eval-label">{label}</div>'
+                    f'    <div class="eval-reason">{reason}</div>'
+                    f'  </div>'
+                    f'  <div class="{score_class}">{score:.2f}</div>'
+                    f'</div>'
+                )
+
+            st.markdown(
+                f'<div class="eval-wrap">'
+                f'  <div class="overall-score">'
+                f'    <span class="overall-label">Overall</span>'
+                f'    <span class="{overall_class} overall-value">{overall:.2f}</span>'
+                f'  </div>'
+                f'  {rows}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 

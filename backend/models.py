@@ -69,13 +69,10 @@ class QueryRequest(BaseModel):
 # ─────────────────────────────────────────────
 
 class SourceDocument(BaseModel):
-    """
-    A single retrieved chunk that contributed to the answer.
-    Exposed so the frontend can show citations clearly.
-    """
-    title: str = Field(description="Meeting title extracted from transcript.")
-    date:  str = Field(description="Meeting date in YYYY-MM-DD format.")
-    score: float = Field(description="Cosine similarity score (0–1). Higher = more relevant.")
+    title:   str   = Field(description="Meeting title extracted from transcript.")
+    date:    str   = Field(description="Meeting date in YYYY-MM-DD format.")
+    score:   float = Field(description="Cosine similarity score (0–1). Higher = more relevant.")
+    excerpt: str   = Field(default="", description="Raw chunk text used for evaluation.")
 
 
 class QueryResponse(BaseModel):
@@ -147,3 +144,21 @@ class ActionItemsResponse(BaseModel):
     """Response payload for POST /action-items"""
     action_items: list[ActionItem] = Field(description="Extracted action items.")
     sources:      list[SourceDocument] = Field(description="Meetings searched.")
+
+class EvalScore(BaseModel):
+    score:  float = Field(description="Score between 0 and 1.")
+    reason: str   = Field(description="One sentence explanation.")
+
+
+class EvaluationResponse(BaseModel):
+    status:            str       = Field(description="'success' or 'error'")
+    overall:           float     = Field(description="Weighted overall score (0-1).")
+    faithfulness:      EvalScore = Field(description="Are claims grounded in context?")
+    answer_relevancy:  EvalScore = Field(description="Does answer address the question?")
+    context_precision: EvalScore = Field(description="Are retrieved chunks relevant?")
+
+
+class EvaluateRequest(BaseModel):
+    question: str = Field(..., min_length=5, max_length=500)
+    answer:   str = Field(..., min_length=5)
+    contexts: list[str] = Field(..., description="List of retrieved chunk texts.")

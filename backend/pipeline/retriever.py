@@ -202,9 +202,10 @@ def query(
         "answer": response.content.strip(),
         "sources": [
             {
-                "title": c["metadata"].get("title", "Unknown"),
-                "date":  c["metadata"].get("meeting_date", "Unknown"),
-                "score": c["score"],
+                "title":   c["metadata"].get("title", "Unknown"),
+                "date":    c["metadata"].get("meeting_date", "Unknown"),
+                "score":   c["score"],
+                "excerpt": c["document"][:300],
             }
             for c in chunks
         ],
