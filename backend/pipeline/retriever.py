@@ -6,6 +6,7 @@ from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 import chromadb
+from rank_bm25 import BM25Okapi
 
 # ── Load environment ──────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -71,12 +72,143 @@ def build_context(chunks: list) -> str:
     return "\n\n".join(context_parts)
 
 
+def hybrid_search(
+    question:     str,
+    where_filter: dict = None,
+    top_k:        int  = TOP_K,
+) -> list:
+    """
+    Hybrid search — combines BM25 keyword search with semantic vector search.
+
+    Why hybrid over pure semantic:
+      Semantic search excels at conceptual queries ("what did we decide")
+      but misses exact keyword matches (names, dates, project codes).
+      BM25 catches exact matches but misses meaning.
+      Combining both with Reciprocal Rank Fusion (RRF) gets the best
+      of both — used by Notion AI, Perplexity, and production RAG systems.
+
+    Reciprocal Rank Fusion formula:
+      score(d) = Σ 1 / (k + rank(d))
+      k=60 is standard — dampens the impact of very high ranks
+    """
+    client     = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    collection = client.get_collection("meeting_transcripts")
+
+    # ── Fetch all chunks (with optional date filter) ──────────────
+    fetch_params = {"include": ["documents", "metadatas"]}
+    if where_filter:
+        fetch_params["where"] = where_filter
+
+    all_results = collection.get(**fetch_params)
+    all_docs    = all_results["documents"]
+    all_metas   = all_results["metadatas"]
+
+    if not all_docs:
+        return []
+
+    # ── BM25 keyword search ───────────────────────────────────────
+    tokenized = [doc.lower().split() for doc in all_docs]
+    bm25      = BM25Okapi(tokenized)
+    bm25_scores = bm25.get_scores(question.lower().split())
+    bm25_ranked = sorted(
+        range(len(bm25_scores)),
+        key=lambda i: bm25_scores[i],
+        reverse=True,
+    )
+
+    # ── Semantic vector search ────────────────────────────────────
+    embed_fn  = get_embedding_function()
+    query_vec = embed_fn.embed_query(question)
+
+    semantic_results = collection.query(
+        query_embeddings=[query_vec],
+        n_results=min(top_k * 3, len(all_docs)),
+        where=where_filter,
+        include=["documents", "metadatas", "distances"],
+    )
+    semantic_ids = semantic_results["documents"][0]
+    semantic_ranked = [
+        all_docs.index(doc)
+        for doc in semantic_ids
+        if doc in all_docs
+    ]
+
+    # ── Reciprocal Rank Fusion ────────────────────────────────────
+    k      = 60
+    scores = {}
+
+    for rank, idx in enumerate(bm25_ranked):
+        scores[idx] = scores.get(idx, 0) + 1 / (k + rank + 1)
+
+    for rank, idx in enumerate(semantic_ranked):
+        scores[idx] = scores.get(idx, 0) + 1 / (k + rank + 1)
+
+    # ── Return top_k fused results ────────────────────────────────
+    top_indices = sorted(scores, key=scores.__getitem__, reverse=True)[:top_k]
+
+    return [
+        {
+            "document": all_docs[i],
+            "metadata": all_metas[i],
+            "score":    round(scores[i], 4),
+        }
+        for i in top_indices
+    ]
+
+
 def query(
-    question: str,
-    date_from: str = None,  # format: "YYYY-MM-DD"
-    date_to:   str = None,  # format: "YYYY-MM-DD"
+    question:  str,
+    date_from: str = None,
+    date_to:   str = None,
     top_k:     int = TOP_K,
 ) -> dict:
+    """
+    Main query function — now powered by hybrid search.
+    Temporal filtering applied before hybrid retrieval.
+    """
+    # ── Build date filter ─────────────────────────────────────────
+    where_filter = None
+    if date_from or date_to:
+        from datetime import datetime
+        conditions = []
+        if date_from:
+            ts = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$gte": ts}})
+        if date_to:
+            ts = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$lte": ts}})
+        where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+
+    # ── Hybrid retrieval ──────────────────────────────────────────
+    chunks = hybrid_search(question, where_filter, top_k)
+
+    if not chunks:
+        return {
+            "answer":  "No relevant meeting transcripts found.",
+            "sources": [],
+        }
+
+    # ── Build prompt and call LLM ─────────────────────────────────
+    context = build_context(chunks)
+    prompt  = PromptTemplate(
+        template=PROMPT_TEMPLATE,
+        input_variables=["context", "question"],
+    )
+    llm      = get_llm()
+    chain    = prompt | llm
+    response = chain.invoke({"context": context, "question": question})
+
+    return {
+        "answer": response.content.strip(),
+        "sources": [
+            {
+                "title": c["metadata"].get("title", "Unknown"),
+                "date":  c["metadata"].get("meeting_date", "Unknown"),
+                "score": c["score"],
+            }
+            for c in chunks
+        ],
+    }
     """
     Main retrieval function:
     1. Embed the question
