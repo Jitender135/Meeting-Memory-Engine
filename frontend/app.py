@@ -400,6 +400,75 @@ div[data-testid="column"]:last-child .stButton > button {
     color: #cc4444 !important;
     font-size: 13px !important;
 }
+            
+/* ── Chat interface ── */
+.chat-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 8px;
+    margin-bottom: 24px;
+}
+.chat-bubble-user {
+    align-self: flex-end;
+    background: #1a2a4a;
+    border: 1px solid #1e3a6e;
+    border-radius: 12px 12px 2px 12px;
+    padding: 12px 16px;
+    max-width: 75%;
+    font-size: 14px;
+    color: #e2e8f0;
+    line-height: 1.6;
+}
+.chat-bubble-assistant {
+    align-self: flex-start;
+    background: #111111;
+    border: 1px solid #1c1c1c;
+    border-left: 2px solid #4f6ef7;
+    border-radius: 2px 12px 12px 12px;
+    padding: 12px 16px;
+    max-width: 85%;
+    font-size: 14px;
+    color: #d4d4d4;
+    line-height: 1.75;
+}
+.chat-sources {
+    font-size: 11px;
+    color: #333333;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #1a1a1a;
+}
+.chat-source-item {
+    display: inline-block;
+    background: #0f0f0f;
+    border: 1px solid #1a1a1a;
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin-right: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #444444;
+}
+.mode-tab {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-right: 6px;
+}
+.mode-tab-active {
+    background: #4f6ef7;
+    color: #ffffff;
+}
+.mode-tab-inactive {
+    background: #1a1a1a;
+    color: #555555;
+    border: 1px solid #222222;
+}
+            
 </style>
 """, unsafe_allow_html=True)
 
@@ -467,11 +536,24 @@ def api_evaluate(question: str, answer: str, contexts: list) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
+def api_chat(question: str, history: list, date_from=None, date_to=None) -> dict:
+    payload = {"question": question, "history": history}
+    if date_from:
+        payload["date_from"] = str(date_from)
+    if date_to:
+        payload["date_to"] = str(date_to)
+    try:
+        r = httpx.post(f"{API_BASE}/chat", json=payload, timeout=30)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── Session state ──────────────────────────────────────────────────
 if "history"       not in st.session_state: st.session_state.history       = []
 if "last_result"   not in st.session_state: st.session_state.last_result   = None
 if "last_question" not in st.session_state: st.session_state.last_question = ""
+if "chat_history"  not in st.session_state: st.session_state.chat_history  = []
+if "mode"          not in st.session_state: st.session_state.mode          = "search"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -553,170 +635,242 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Input
-st.markdown('<span class="input-label">Question</span>', unsafe_allow_html=True)
-question = st.text_area(
-    label="question_input",
-    placeholder="What did we decide about the mobile app launch?",
-    height=88,
-    label_visibility="collapsed",
+# ── Mode tabs ─────────────────────────────────────────────────────
+col_s, col_c, _ = st.columns([1, 1, 5])
+with col_s:
+    if st.button("Search", key="mode_search", use_container_width=True):
+        st.session_state.mode = "search"
+with col_c:
+    if st.button("Chat", key="mode_chat", use_container_width=True):
+        st.session_state.mode = "chat"
+
+st.markdown(
+    f'<div style="font-size:11px;color:#333333;margin-bottom:16px;margin-top:4px;">'
+    f'Mode: <span style="color:#4f6ef7;font-weight:500;">'
+    f'{"Search — single query" if st.session_state.mode == "search" else "Chat — conversational memory"}'
+    f'</span></div>',
+    unsafe_allow_html=True,
 )
 
-col_search, col_clear = st.columns([5, 1])
-with col_search:
-    search_clicked = st.button("Search", use_container_width=True)
-with col_clear:
-    clear_clicked = st.button("Clear", use_container_width=True)
+# ── SEARCH MODE ───────────────────────────────────────────────────
+if st.session_state.mode == "search":
 
-if clear_clicked:
-    st.session_state.last_result   = None
-    st.session_state.last_question = ""
-    st.rerun()
+    st.markdown('<span class="input-label">Question</span>', unsafe_allow_html=True)
+    question = st.text_area(
+        label="question_input",
+        placeholder="What did we decide about the mobile app launch?",
+        height=88,
+        label_visibility="collapsed",
+    )
 
-# Run query
-if search_clicked:
-    if not question.strip():
-        st.warning("Enter a question to search.")
-    else:
-        with st.spinner("Searching..."):
-            result = api_query(
-                question=question.strip(),
-                date_from=date_from if use_filter else None,
-                date_to=date_to   if use_filter else None,
-                top_k=top_k,
-            )
-        st.session_state.last_result   = result
-        st.session_state.last_question = question.strip()
-        if question.strip() not in st.session_state.history:
-            st.session_state.history.append(question.strip())
+    col_search, col_clear = st.columns([5, 1])
+    with col_search:
+        search_clicked = st.button("Search", use_container_width=True)
+    with col_clear:
+        clear_clicked = st.button("Clear", use_container_width=True)
 
-# Render result
-if st.session_state.last_result:
-    result = st.session_state.last_result
+    if clear_clicked:
+        st.session_state.last_result   = None
+        st.session_state.last_question = ""
+        st.rerun()
 
-    if "error" in result:
-        st.error(f"Request failed: {result['error']}")
-    else:
-        st.markdown('<span class="answer-label">Answer</span>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="answer-block">{result["answer"]}</div>',
-            unsafe_allow_html=True,
-        )
+    if search_clicked:
+        if not question.strip():
+            st.warning("Enter a question to search.")
+        else:
+            with st.spinner("Searching..."):
+                result = api_query(
+                    question=question.strip(),
+                    date_from=date_from if use_filter else None,
+                    date_to=date_to     if use_filter else None,
+                    top_k=top_k,
+                )
+            st.session_state.last_result   = result
+            st.session_state.last_question = question.strip()
+            if question.strip() not in st.session_state.history:
+                st.session_state.history.append(question.strip())
 
-        sources = result.get("sources", [])
-        if sources:
-            st.markdown('<span class="sources-label">Sources</span>', unsafe_allow_html=True)
-            for s in sources:
-                score_pct = round(s["score"] * 100)
+    if st.session_state.last_result:
+        result = st.session_state.last_result
+        if "error" in result:
+            st.error(f"Request failed: {result['error']}")
+        else:
+            st.markdown('<span class="answer-label">Answer</span>', unsafe_allow_html=True)
+            st.markdown(f'<div class="answer-block">{result["answer"]}</div>', unsafe_allow_html=True)
+
+            sources = result.get("sources", [])
+            if sources:
+                st.markdown('<span class="sources-label">Sources</span>', unsafe_allow_html=True)
+                for s in sources:
+                    score_pct = round(s["score"] * 100)
+                    st.markdown(
+                        f'<div class="source-row">'
+                        f'  <div class="source-left">'
+                        f'    <div class="source-name">{s["title"]}</div>'
+                        f'    <div class="source-date">{s["date"]}</div>'
+                        f'  </div>'
+                        f'  <div class="source-score">{score_pct}% match</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown('<span class="sources-label">Action Items</span>', unsafe_allow_html=True)
+            with st.spinner("Extracting action items..."):
+                ai_result = api_action_items(
+                    question=st.session_state.last_question,
+                    date_from=date_from if use_filter else None,
+                    date_to=date_to     if use_filter else None,
+                )
+            items = ai_result.get("action_items", [])
+            if items:
+                rows = ""
+                for item in items:
+                    rows += (
+                        f'<tr>'
+                        f'<td class="owner-cell">{item.get("owner","—")}</td>'
+                        f'<td>{item.get("task","—")}</td>'
+                        f'<td class="due-cell">{item.get("due","—")}</td>'
+                        f'<td class="due-cell">{item.get("meeting","—")}</td>'
+                        f'</tr>'
+                    )
                 st.markdown(
-                    f'<div class="source-row">'
-                    f'  <div class="source-left">'
-                    f'    <div class="source-name">{s["title"]}</div>'
-                    f'    <div class="source-date">{s["date"]}</div>'
-                    f'  </div>'
-                    f'  <div class="source-score">{score_pct}% match</div>'
-                    f'</div>',
+                    f'<div class="action-wrap"><table class="action-table">'
+                    f'<thead><tr><th>Owner</th><th>Task</th><th>Due</th><th>Meeting</th></tr></thead>'
+                    f'<tbody>{rows}</tbody></table></div>',
                     unsafe_allow_html=True,
                 )
+            else:
+                st.markdown('<div style="font-size:13px;color:#333333;padding:12px 0;">No action items found.</div>', unsafe_allow_html=True)
 
-        # ── Action items ──────────────────────────────────────────
-        st.markdown('<span class="sources-label">Action Items</span>', unsafe_allow_html=True)
-        with st.spinner("Extracting action items..."):
-            ai_result = api_action_items(
-                question=st.session_state.last_question,
-                date_from=date_from if use_filter else None,
-                date_to=date_to     if use_filter else None,
-            )
-
-        items = ai_result.get("action_items", [])
-        if items:
-            rows = ""
-            for item in items:
-                rows += (
-                    f'<tr>'
-                    f'<td class="owner-cell">{item.get("owner", "—")}</td>'
-                    f'<td>{item.get("task", "—")}</td>'
-                    f'<td class="due-cell">{item.get("due", "—")}</td>'
-                    f'<td class="due-cell">{item.get("meeting", "—")}</td>'
-                    f'</tr>'
+            st.markdown('<span class="sources-label">Pipeline Quality</span>', unsafe_allow_html=True)
+            with st.spinner("Evaluating response quality..."):
+                contexts    = [s.get("excerpt", s.get("title", "")) for s in result.get("sources", [])]
+                eval_result = api_evaluate(
+                    question=st.session_state.last_question,
+                    answer=result["answer"],
+                    contexts=contexts,
                 )
-            st.markdown(
-                f'<div class="action-wrap">'
-                f'<table class="action-table">'
-                f'<thead><tr>'
-                f'<th>Owner</th><th>Task</th><th>Due</th><th>Meeting</th>'
-                f'</tr></thead>'
-                f'<tbody>{rows}</tbody>'
-                f'</table></div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div style="font-size:13px;color:#333333;padding:12px 0;">No action items found for this query.</div>',
-                unsafe_allow_html=True,
-            )
-        
-# ── Evaluation scores ─────────────────────────────────────
-        st.markdown('<span class="sources-label">Pipeline Quality</span>', unsafe_allow_html=True)
-        with st.spinner("Evaluating response quality..."):
-            contexts = [s.get("excerpt", s.get("title", "")) for s in result.get("sources", [])]
-            eval_result = api_evaluate(
-                question=st.session_state.last_question,
-                answer=result["answer"],
-                contexts=contexts,
-            )
-
-        if "error" not in eval_result and eval_result.get("status") == "success":
-            overall = eval_result.get("overall", 0)
-            overall_class = (
-                "eval-score-high" if overall >= 0.7
-                else "eval-score-mid" if overall >= 0.4
-                else "eval-score-low"
-            )
-
-            metrics = [
-                ("Faithfulness",      eval_result.get("faithfulness",      {})),
-                ("Answer Relevance",  eval_result.get("answer_relevancy",  {})),
-                ("Context Precision", eval_result.get("context_precision", {})),
-            ]
-
-            rows = ""
-            for label, m in metrics:
-                score = m.get("score", 0)
-                reason = m.get("reason", "")
-                score_class = (
-                    "eval-score-high" if score >= 0.7
-                    else "eval-score-mid" if score >= 0.4
-                    else "eval-score-low"
+            if "error" not in eval_result and eval_result.get("status") == "success":
+                overall       = eval_result.get("overall", 0)
+                overall_class = "eval-score-high" if overall >= 0.7 else "eval-score-mid" if overall >= 0.4 else "eval-score-low"
+                metrics = [
+                    ("Faithfulness",      eval_result.get("faithfulness",      {})),
+                    ("Answer Relevance",  eval_result.get("answer_relevancy",  {})),
+                    ("Context Precision", eval_result.get("context_precision", {})),
+                ]
+                rows = ""
+                for label, m in metrics:
+                    score       = m.get("score", 0)
+                    reason      = m.get("reason", "")
+                    score_class = "eval-score-high" if score >= 0.7 else "eval-score-mid" if score >= 0.4 else "eval-score-low"
+                    rows += (
+                        f'<div class="eval-row">'
+                        f'  <div><div class="eval-label">{label}</div>'
+                        f'  <div class="eval-reason">{reason}</div></div>'
+                        f'  <div class="{score_class}">{score:.2f}</div>'
+                        f'</div>'
+                    )
+                st.markdown(
+                    f'<div class="eval-wrap">'
+                    f'  <div class="overall-score"><span class="overall-label">Overall</span>'
+                    f'  <span class="{overall_class} overall-value">{overall:.2f}</span></div>'
+                    f'  {rows}</div>',
+                    unsafe_allow_html=True,
                 )
-                rows += (
-                    f'<div class="eval-row">'
-                    f'  <div>'
-                    f'    <div class="eval-label">{label}</div>'
-                    f'    <div class="eval-reason">{reason}</div>'
-                    f'  </div>'
-                    f'  <div class="{score_class}">{score:.2f}</div>'
-                    f'</div>'
-                )
+    else:
+        st.markdown("""
+        <div class="empty-wrap">
+            <div class="empty-heading">Try one of these</div>
+            <div class="example-item">What did we decide about the mobile app launch?</div>
+            <div class="example-item">What action items were assigned in Q1?</div>
+            <div class="example-item">Who committed to the Android performance fix?</div>
+            <div class="example-item">What was the pricing model we agreed on?</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-            st.markdown(
-                f'<div class="eval-wrap">'
-                f'  <div class="overall-score">'
-                f'    <span class="overall-label">Overall</span>'
-                f'    <span class="{overall_class} overall-value">{overall:.2f}</span>'
-                f'  </div>'
-                f'  {rows}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
 
+# ── CHAT MODE ─────────────────────────────────────────────────────
 else:
-    st.markdown("""
-    <div class="empty-wrap">
-        <div class="empty-heading">Try one of these</div>
-        <div class="example-item">What did we decide about the mobile app launch?</div>
-        <div class="example-item">What action items were assigned in Q1?</div>
-        <div class="example-item">Who committed to the Android performance fix?</div>
-        <div class="example-item">What was the pricing model we agreed on?</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Render chat history
+    if st.session_state.chat_history:
+        st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
+        for turn in st.session_state.chat_history:
+            if turn["role"] == "user":
+                st.markdown(
+                    f'<div style="display:flex;justify-content:flex-end;margin-bottom:8px;">'
+                    f'<div class="chat-bubble-user">{turn["content"]}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                sources_html = ""
+                if turn.get("sources"):
+                    sources_html = '<div class="chat-sources">'
+                    for s in turn["sources"]:
+                        sources_html += f'<span class="chat-source-item">{s["title"]} · {s["date"]}</span>'
+                    sources_html += '</div>'
+                st.markdown(
+                    f'<div style="margin-bottom:8px;">'
+                    f'<div class="chat-bubble-assistant">{turn["content"]}{sources_html}</div></div>',
+                    unsafe_allow_html=True,
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="empty-wrap">
+            <div class="empty-heading">Start a conversation</div>
+            <div class="example-item">What did we decide about the mobile app launch?</div>
+            <div class="example-item">Then ask: Who was responsible for that?</div>
+            <div class="example-item">Or: When was the deadline for it?</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Chat input
+    st.markdown('<span class="input-label">Message</span>', unsafe_allow_html=True)
+    chat_question = st.text_area(
+        label="chat_input",
+        placeholder="Ask a follow-up question...",
+        height=72,
+        label_visibility="collapsed",
+        key="chat_textarea",
+    )
+
+    col_send, col_reset = st.columns([5, 1])
+    with col_send:
+        send_clicked = st.button("Send", use_container_width=True, key="chat_send")
+    with col_reset:
+        reset_clicked = st.button("Reset", use_container_width=True, key="chat_reset")
+
+    if reset_clicked:
+        st.session_state.chat_history = []
+        st.rerun()
+
+    if send_clicked:
+        if not chat_question.strip():
+            st.warning("Enter a message.")
+        else:
+            # Build history for API
+            api_history = [
+                {"role": t["role"], "content": t["content"]}
+                for t in st.session_state.chat_history
+            ]
+            with st.spinner("Thinking..."):
+                result = api_chat(
+                    question=chat_question.strip(),
+                    history=api_history,
+                    date_from=date_from if use_filter else None,
+                    date_to=date_to     if use_filter else None,
+                )
+
+            if "error" in result:
+                st.error(f"Error: {result['error']}")
+            else:
+                st.session_state.chat_history.append({
+                    "role":    "user",
+                    "content": chat_question.strip(),
+                })
+                st.session_state.chat_history.append({
+                    "role":    "assistant",
+                    "content": result["answer"],
+                    "sources": result.get("sources", []),
+                })
+                st.rerun()

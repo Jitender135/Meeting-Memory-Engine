@@ -440,6 +440,159 @@ def extract_action_items(
 
     return {"action_items": items, "sources": sources}
 
+# ─────────────────────────────────────────────────────────────────
+# CONVERSATIONAL QUERY
+# ─────────────────────────────────────────────────────────────────
+
+CONVERSATIONAL_PROMPT = """
+You are an intelligent meeting assistant with access to past meeting transcripts.
+You are in an ongoing conversation. Use the conversation history to understand
+references like "that", "it", "they", "the decision", "who was responsible" etc.
+
+Conversation History:
+{history}
+
+Retrieved Meeting Context:
+{context}
+
+Current Question: {question}
+
+Instructions:
+- Use conversation history to resolve references in the current question
+- Answer using ONLY the meeting context provided
+- Always cite which meeting (title and date) your answer comes from
+- If the answer is not in the context, say so clearly
+
+Answer:
+"""
+
+
+def conversational_query(
+    question:  str,
+    history:   list[dict],
+    date_from: str = None,
+    date_to:   str = None,
+    top_k:     int = TOP_K,
+) -> dict:
+    """
+    Conversational RAG query with memory.
+
+    Why we pass history into the prompt rather than using
+    LangChain ConversationBufferMemory:
+        ConversationBufferMemory stores state server-side which
+        breaks stateless FastAPI design. Instead we pass the full
+        conversation history from the client on every request —
+        stateless backend, stateful frontend. This is the correct
+        pattern for REST APIs.
+
+    Args:
+        question  — current user question
+        history   — list of {role, content} dicts from previous turns
+        date_from — optional temporal filter start
+        date_to   — optional temporal filter end
+        top_k     — chunks to retrieve
+    """
+    # ── Build date filter ─────────────────────────────────────────
+    where_filter = None
+    if date_from or date_to:
+        from datetime import datetime
+        conditions = []
+        if date_from:
+            ts = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$gte": ts}})
+        if date_to:
+            ts = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp())
+            conditions.append({"meeting_timestamp": {"$lte": ts}})
+        where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+
+    # ── Hybrid retrieval ──────────────────────────────────────────
+    # Enrich query with last assistant answer for better retrieval
+    last_answer = ""
+    for turn in reversed(history):
+        if turn.get("role") == "assistant":
+            last_answer = turn.get("content", "")
+            break
+
+    enriched_question = f"{question} {last_answer[:150]}" if last_answer else question
+    chunks = hybrid_search(enriched_question, where_filter, top_k)
+
+    if not chunks:
+        return {
+            "answer":  "I couldn't find relevant information in the meeting transcripts.",
+            "sources": [],
+        }
+
+    # ── Format conversation history ───────────────────────────────
+    history_text = ""
+    for turn in history[-6:]:  # last 6 turns — avoid token overflow
+        role    = "User"      if turn.get("role") == "user"      else "Assistant"
+        content = turn.get("content", "")
+        history_text += f"{role}: {content}\n"
+
+    if not history_text:
+        history_text = "No previous conversation."
+
+    # ── Build prompt and call LLM ─────────────────────────────────
+    context  = build_context(chunks)
+    prompt   = PromptTemplate(
+        template=CONVERSATIONAL_PROMPT,
+        input_variables=["history", "context", "question"],
+    )
+    llm      = get_llm()
+    chain    = prompt | llm
+    response = chain.invoke({
+        "history":  history_text,
+        "context":  context,
+        "question": question,
+    })
+
+    return {
+        "answer": response.content.strip(),
+        "sources": [
+            {
+                "title":   c["metadata"].get("title",        "Unknown"),
+                "date":    c["metadata"].get("meeting_date", "Unknown"),
+                "score":   c["score"],
+                "excerpt": c["document"][:300],
+            }
+            for c in chunks
+        ],
+    }
+
+
+# ── Test directly ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("=== Test 1: No date filter ===")
+    result = query("What did we decide about the mobile app launch?")
+    print("Answer:", result["answer"])
+    print("Sources:", result["sources"])
+
+    print("\n=== Test 2: With date filter (Q1 only) ===")
+    result = query(
+        question="What action items were assigned?",
+        date_from="2024-01-01",
+        date_to="2024-03-01",
+    )
+    print("Answer:", result["answer"])
+    print("Sources:", result["sources"])
+
+    print("\n=== Test 3: Conversational memory ===")
+    history = [
+        {"role": "user",      "content": "What did we decide about the mobile app launch?"},
+        {"role": "assistant", "content": "We decided to launch on iOS first on April 5th, with Android following in 6 weeks."},
+    ]
+    result = conversational_query(
+        question="Who was responsible for that?",
+        history=history,
+    )
+    print("Answer:", result["answer"])
+    print("Sources:", result["sources"])
+
+    print("\n=== Action Item Extraction Test ===")
+    result = extract_action_items("What action items were assigned?")
+    print(f"Found {len(result['action_items'])} action items:")
+    for item in result["action_items"]:
+        print(f"  - [{item.get('owner')}] {item.get('task')} (due: {item.get('due')})")
 
 # ── Test directly ─────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pipeline.retriever  import query as rag_query, extract_action_items
+from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query
 from pipeline.evaluator  import evaluate_pipeline
 
 from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
@@ -42,6 +42,8 @@ from models import (
     EvalScore,
     EvaluationResponse,
     EvaluateRequest,
+    ConversationTurn,
+    ConversationalQueryRequest,
 )
 
 # ── Environment ───────────────────────────────────────────────────
@@ -293,3 +295,42 @@ def evaluate_response(request: EvaluateRequest) -> EvaluationResponse:
         )
 
     return EvaluationResponse(**result)
+
+# ─────────────────────────────────────────────────────────────────
+# POST /chat  ← conversational multi-turn endpoint
+# ─────────────────────────────────────────────────────────────────
+@app.post(
+    "/chat",
+    response_model=QueryResponse,
+    summary="Multi-turn conversational query with memory",
+    tags=["Pipeline"],
+)
+def chat(request: ConversationalQueryRequest) -> QueryResponse:
+    """
+    Conversational RAG endpoint with memory.
+
+    Accepts full conversation history on every request.
+    Why stateless history (client sends history each time):
+        Stateful server-side memory breaks horizontal scaling
+        and makes the API harder to test. Passing history from
+        the client on every request is the correct REST pattern —
+        the backend stays stateless, the frontend owns the state.
+    """
+    try:
+        result = conversational_query(
+            question=request.question,
+            history=[t.model_dump() for t in request.history],
+            date_from=str(request.date_from) if request.date_from else None,
+            date_to=str(request.date_to)     if request.date_to   else None,
+            top_k=request.top_k,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Chat error: {str(e)}",
+        )
+
+    return QueryResponse(
+        answer=result["answer"],
+        sources=[SourceDocument(**s) for s in result["sources"]],
+    )

@@ -162,3 +162,25 @@ class EvaluateRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=500)
     answer:   str = Field(..., min_length=5)
     contexts: list[str] = Field(..., description="List of retrieved chunk texts.")
+
+class ConversationTurn(BaseModel):
+    """A single turn in the conversation history."""
+    role:    str = Field(description="'user' or 'assistant'")
+    content: str = Field(description="Message content.")
+
+
+class ConversationalQueryRequest(BaseModel):
+    """Payload for POST /chat — multi-turn conversational query."""
+    question: str = Field(
+        ...,
+        min_length=2,
+        max_length=500,
+        description="The current question.",
+    )
+    history: list[ConversationTurn] = Field(
+        default=[],
+        description="Previous conversation turns for context.",
+    )
+    date_from: Optional[date] = Field(default=None)
+    date_to:   Optional[date] = Field(default=None)
+    top_k:     int            = Field(default=3, ge=1, le=10)
