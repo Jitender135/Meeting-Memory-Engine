@@ -1,0 +1,523 @@
+"""
+app.py — Streamlit frontend for Meeting Memory Engine.
+Design: Monochrome internal tool. No gradients, no emojis in UI, no AI aesthetics.
+Inspired by Linear, Vercel, Raycast.
+"""
+
+import httpx
+import streamlit as st
+from datetime import date
+
+# ── Page config ────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Meeting Memory",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── CSS ────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, [data-testid="stAppViewContainer"] {
+    background: #0a0a0a;
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    color: #e8e8e8;
+    font-size: 14px;
+}
+
+#MainMenu, footer, header, [data-testid="stToolbar"] { display: none !important; }
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: #0f0f0f;
+    border-right: 1px solid #1c1c1c;
+    padding: 0;
+}
+[data-testid="stSidebar"] > div:first-child { padding: 28px 20px; }
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #1c1c1c;
+}
+.brand-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #4f6ef7;
+    flex-shrink: 0;
+}
+.brand-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    letter-spacing: -0.2px;
+}
+
+.nav-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #333333;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+    margin-top: 24px;
+    display: block;
+}
+
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #555555;
+    padding: 8px 0;
+}
+.dot-green  { width:6px; height:6px; border-radius:50%; background:#22c55e; flex-shrink:0; }
+.dot-red    { width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0; }
+.dot-yellow { width:6px; height:6px; border-radius:50%; background:#f59e0b; flex-shrink:0; }
+
+.meeting-item {
+    padding: 9px 0;
+    border-bottom: 1px solid #141414;
+}
+.meeting-item-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: #cccccc;
+    line-height: 1.4;
+}
+.meeting-item-date {
+    font-size: 11px;
+    color: #444444;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Main content ── */
+[data-testid="stMain"] { background: #0a0a0a; }
+.block-container { padding: 40px 48px 40px 48px !important; max-width: 860px; }
+
+.page-header {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid #1c1c1c;
+}
+.page-title {
+    font-size: 22px;
+    font-weight: 600;
+    color: #ffffff;
+    letter-spacing: -0.4px;
+    line-height: 1.3;
+}
+.page-desc {
+    font-size: 13px;
+    color: #555555;
+    margin-top: 6px;
+    line-height: 1.5;
+}
+
+/* ── Input area ── */
+.input-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #444444;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    display: block;
+}
+
+.stTextArea textarea {
+    background: #111111 !important;
+    border: 1px solid #222222 !important;
+    border-radius: 6px !important;
+    color: #e8e8e8 !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.6 !important;
+    resize: none !important;
+    padding: 12px 14px !important;
+    transition: border-color 0.15s !important;
+}
+.stTextArea textarea::placeholder { color: #383838 !important; }
+.stTextArea textarea:focus {
+    border-color: #4f6ef7 !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+[data-testid="stTextArea"] label { display: none !important; }
+
+/* ── Buttons ── */
+.stButton > button {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    border-radius: 6px !important;
+    border: none !important;
+    padding: 9px 20px !important;
+    cursor: pointer !important;
+    transition: opacity 0.15s !important;
+}
+.stButton > button:hover { opacity: 0.85 !important; }
+
+div[data-testid="column"]:first-child .stButton > button {
+    background: #4f6ef7 !important;
+    color: #ffffff !important;
+    width: 100% !important;
+    letter-spacing: 0.02em !important;
+    font-size: 13px !important;
+}
+div[data-testid="column"]:last-child .stButton > button {
+    background: #1a1a1a !important;
+    color: #888888 !important;
+    border: 1px solid #222222 !important;
+    width: 100% !important;
+}
+
+/* ── Sidebar button ── */
+[data-testid="stSidebar"] .stButton > button {
+    background: #1a1a1a !important;
+    color: #888888 !important;
+    border: 1px solid #222222 !important;
+    font-size: 12px !important;
+    padding: 7px 14px !important;
+    width: 100% !important;
+}
+
+/* ── Filter toggle ── */
+.stToggle { margin: 4px 0 !important; }
+[data-testid="stToggle"] label { font-size: 12px !important; color: #555555 !important; }
+
+/* ── Slider ── */
+[data-testid="stSlider"] label { font-size: 12px !important; color: #555555 !important; }
+.stSlider [data-baseweb="slider"] { margin-top: 8px; }
+
+/* ── Answer section ── */
+.answer-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #333333;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 12px;
+    margin-top: 28px;
+    display: block;
+}
+
+.answer-block {
+    background: #111111;
+    border: 1px solid #1c1c1c;
+    border-left: 2px solid #4f6ef7;
+    border-radius: 6px;
+    padding: 18px 20px;
+    font-size: 14px;
+    line-height: 1.75;
+    color: #d4d4d4;
+}
+
+/* ── Sources ── */
+.sources-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #333333;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 24px;
+    margin-bottom: 12px;
+    display: block;
+}
+
+.source-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border: 1px solid #1a1a1a;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    background: #0f0f0f;
+}
+.source-left {}
+.source-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #cccccc;
+}
+.source-date {
+    font-size: 11px;
+    color: #444444;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+.source-score {
+    font-size: 11px;
+    font-weight: 500;
+    color: #4f6ef7;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding: 3px 10px;
+    border: 1px solid #1e2a5e;
+    border-radius: 4px;
+    background: #0d1232;
+}
+
+/* ── Empty state ── */
+.empty-wrap {
+    padding: 24px 0 32px;
+    border-top: 1px solid #141414;
+    margin-top: 16px;
+}
+.empty-heading {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333333;
+    margin-bottom: 20px;
+}
+.example-item {
+    font-size: 13px;
+    color: #333333;
+    padding: 10px 14px;
+    border: 1px solid #161616;
+    border-radius: 5px;
+    margin-bottom: 6px;
+    font-style: italic;
+    cursor: default;
+}
+
+/* ── History ── */
+.history-item {
+    font-size: 12px;
+    color: #444444;
+    padding: 7px 0;
+    border-bottom: 1px solid #141414;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.history-item::before {
+    content: '↳ ';
+    color: #2a2a2a;
+}
+
+/* ── Warning / error ── */
+[data-testid="stAlert"] {
+    background: #130d0d !important;
+    border: 1px solid #3a1a1a !important;
+    border-radius: 6px !important;
+    color: #cc4444 !important;
+    font-size: 13px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Constants ──────────────────────────────────────────────────────
+API_BASE = "http://localhost:8000"
+
+
+# ── API helpers ────────────────────────────────────────────────────
+def api_health() -> dict:
+    try:
+        r = httpx.get(f"{API_BASE}/health", timeout=5)
+        return r.json()
+    except Exception:
+        return {"status": "error", "pipeline": "unreachable"}
+
+
+def api_meetings() -> list:
+    try:
+        r = httpx.get(f"{API_BASE}/meetings", timeout=5)
+        return r.json().get("meetings", [])
+    except Exception:
+        return []
+
+
+def api_query(question: str, date_from=None, date_to=None, top_k=3) -> dict:
+    payload = {"question": question, "top_k": top_k}
+    if date_from:
+        payload["date_from"] = str(date_from)
+    if date_to:
+        payload["date_to"] = str(date_to)
+    try:
+        r = httpx.post(f"{API_BASE}/query", json=payload, timeout=30)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def api_ingest() -> dict:
+    try:
+        r = httpx.post(f"{API_BASE}/ingest", timeout=60)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Session state ──────────────────────────────────────────────────
+if "history"       not in st.session_state: st.session_state.history       = []
+if "last_result"   not in st.session_state: st.session_state.last_result   = None
+if "last_question" not in st.session_state: st.session_state.last_question = ""
+
+
+# ══════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════
+with st.sidebar:
+
+    # Brand
+    st.markdown("""
+    <div class="brand">
+        <div class="brand-dot"></div>
+        <span class="brand-name">Meeting Memory</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Status
+    st.markdown('<span class="nav-label">System</span>', unsafe_allow_html=True)
+    health = api_health()
+    if health.get("status") == "ok" and health.get("pipeline") == "ready":
+        st.markdown('<div class="status-row"><div class="dot-green"></div>API connected &middot; Pipeline ready</div>', unsafe_allow_html=True)
+    elif health.get("status") == "ok":
+        st.markdown('<div class="status-row"><div class="dot-yellow"></div>API connected &middot; Not ingested</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="status-row"><div class="dot-red"></div>API unreachable</div>', unsafe_allow_html=True)
+
+    # Re-ingest
+    st.markdown('<span class="nav-label">Pipeline</span>', unsafe_allow_html=True)
+    if st.button("Re-index transcripts", use_container_width=True):
+        with st.spinner("Indexing..."):
+            result = api_ingest()
+        if "error" in result:
+            st.error(result["error"])
+        else:
+            st.success(f"{result.get('files')} files · {result.get('chunks')} chunks indexed")
+
+    # Meetings list
+    st.markdown('<span class="nav-label">Indexed Meetings</span>', unsafe_allow_html=True)
+    meetings = api_meetings()
+    if meetings:
+        for m in meetings:
+            st.markdown(
+                f'<div class="meeting-item">'
+                f'<div class="meeting-item-title">{m["title"]}</div>'
+                f'<div class="meeting-item-date">{m["date"]}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown('<div class="status-row">No meetings indexed.</div>', unsafe_allow_html=True)
+
+    # Filters
+    st.markdown('<span class="nav-label">Filters</span>', unsafe_allow_html=True)
+    use_filter = st.toggle("Filter by date range", value=False)
+    date_from, date_to = None, None
+    if use_filter:
+        date_from = st.date_input("From", value=date(2024, 1, 1), label_visibility="visible")
+        date_to   = st.date_input("To",   value=date.today(),     label_visibility="visible")
+
+    st.markdown('<span class="nav-label">Retrieval</span>', unsafe_allow_html=True)
+    top_k = st.slider("Chunks to retrieve", min_value=1, max_value=6, value=3)
+
+    # History
+    if st.session_state.history:
+        st.markdown('<span class="nav-label">Recent</span>', unsafe_allow_html=True)
+        for q in reversed(st.session_state.history[-6:]):
+            st.markdown(
+                f'<div class="history-item">{q[:52]}{"..." if len(q) > 52 else ""}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════
+# MAIN PANEL
+# ══════════════════════════════════════════════════════════════════
+st.markdown("""
+<div class="page-header">
+    <div class="page-title">Query your meetings</div>
+    <div class="page-desc">Ask anything across all indexed transcripts. Answers are grounded in source documents and cited by meeting.</div>
+</div>
+""", unsafe_allow_html=True)
+
+# Input
+st.markdown('<span class="input-label">Question</span>', unsafe_allow_html=True)
+question = st.text_area(
+    label="question_input",
+    placeholder="What did we decide about the mobile app launch?",
+    height=88,
+    label_visibility="collapsed",
+)
+
+col_search, col_clear = st.columns([5, 1])
+with col_search:
+    search_clicked = st.button("Search", use_container_width=True)
+with col_clear:
+    clear_clicked = st.button("Clear", use_container_width=True)
+
+if clear_clicked:
+    st.session_state.last_result   = None
+    st.session_state.last_question = ""
+    st.rerun()
+
+# Run query
+if search_clicked:
+    if not question.strip():
+        st.warning("Enter a question to search.")
+    else:
+        with st.spinner("Searching..."):
+            result = api_query(
+                question=question.strip(),
+                date_from=date_from if use_filter else None,
+                date_to=date_to   if use_filter else None,
+                top_k=top_k,
+            )
+        st.session_state.last_result   = result
+        st.session_state.last_question = question.strip()
+        if question.strip() not in st.session_state.history:
+            st.session_state.history.append(question.strip())
+
+# Render result
+if st.session_state.last_result:
+    result = st.session_state.last_result
+
+    if "error" in result:
+        st.error(f"Request failed: {result['error']}")
+    else:
+        st.markdown('<span class="answer-label">Answer</span>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="answer-block">{result["answer"]}</div>',
+            unsafe_allow_html=True,
+        )
+
+        sources = result.get("sources", [])
+        if sources:
+            st.markdown('<span class="sources-label">Sources</span>', unsafe_allow_html=True)
+            for s in sources:
+                score_pct = round(s["score"] * 100)
+                st.markdown(
+                    f'<div class="source-row">'
+                    f'  <div class="source-left">'
+                    f'    <div class="source-name">{s["title"]}</div>'
+                    f'    <div class="source-date">{s["date"]}</div>'
+                    f'  </div>'
+                    f'  <div class="source-score">{score_pct}% match</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+else:
+    st.markdown("""
+    <div class="empty-wrap">
+        <div class="empty-heading">Try one of these</div>
+        <div class="example-item">What did we decide about the mobile app launch?</div>
+        <div class="example-item">What action items were assigned in Q1?</div>
+        <div class="example-item">Who committed to the Android performance fix?</div>
+        <div class="example-item">What was the pricing model we agreed on?</div>
+    </div>
+    """, unsafe_allow_html=True)
