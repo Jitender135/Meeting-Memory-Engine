@@ -184,15 +184,20 @@ if __name__ == "__main__":
 ACTION_ITEM_PROMPT = """
 You are a precise meeting assistant that extracts action items from meeting transcripts.
 
-Given the meeting context below, extract ALL action items mentioned.
-For each action item return ONLY a JSON array in this exact format — no preamble, no explanation:
+STRICT RULES:
+- Extract each action item EXACTLY ONCE — no duplicates
+- Use the EXACT name, task, and date as written in the transcript
+- Do NOT paraphrase or reword any action item
+- Do NOT infer or create action items not explicitly stated
+
+Given the meeting context below, return ONLY a JSON array — no preamble, no explanation:
 
 [
-  {{"owner": "Person Name", "task": "What they need to do", "due": "Due date or Not specified", "meeting": "Meeting title", "date": "YYYY-MM-DD"}},
+  {{"owner": "Exact Name", "task": "Exact task as written", "due": "Exact date as written", "meeting": "Meeting title", "date": "YYYY-MM-DD"}},
   ...
 ]
 
-If no action items are found, return an empty array: []
+If no action items found, return: []
 
 Meeting context:
 {context}
@@ -277,6 +282,19 @@ def extract_action_items(
             items = []
     except json.JSONDecodeError:
         items = []
+
+    # Deduplicate — LLM sometimes returns same item from overlapping chunks
+    # Key: owner + first 20 chars of task (handles date format inconsistency)
+    seen_items = set()
+    deduped    = []
+    for item in items:
+        owner = item.get("owner", "").strip().lower()
+        task  = item.get("task",  "").strip().lower()[:20]
+        key   = (owner, task)
+        if key not in seen_items:
+            seen_items.add(key)
+            deduped.append(item)
+    items = deduped
 
     sources = [
         {

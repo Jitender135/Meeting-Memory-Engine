@@ -576,14 +576,7 @@ if st.session_state.last_result:
                 date_to=date_to     if use_filter else None,
             )
 
-        raw_items = ai_result.get("action_items", [])
-seen = set()
-items = []
-for item in raw_items:
-    key = (item.get("owner", ""), item.get("task", "")[:30])
-    if key not in seen:
-        seen.add(key)
-        items.append(item)
+        items = ai_result.get("action_items", [])
         if items:
             rows = ""
             for item in items:
