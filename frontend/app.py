@@ -536,8 +536,8 @@ def api_evaluate(question: str, answer: str, contexts: list) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-def api_chat(question: str, history: list, date_from=None, date_to=None) -> dict:
-    payload = {"question": question, "history": history}
+def api_chat(question: str, history: list, date_from=None, date_to=None, top_k=3) -> dict:
+    payload = {"question": question, "history": history, "top_k": top_k}
     if date_from:
         payload["date_from"] = str(date_from)
     if date_to:
@@ -554,7 +554,7 @@ if "last_result"   not in st.session_state: st.session_state.last_result   = Non
 if "last_question" not in st.session_state: st.session_state.last_question = ""
 if "chat_history"  not in st.session_state: st.session_state.chat_history  = []
 if "mode"          not in st.session_state: st.session_state.mode          = "search"
-
+if "chat_input_key" not in st.session_state: st.session_state.chat_input_key = 0
 
 # ══════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -831,7 +831,7 @@ else:
         placeholder="Ask a follow-up question...",
         height=72,
         label_visibility="collapsed",
-        key="chat_textarea",
+        key=f"chat_input_{st.session_state.chat_input_key}",
     )
 
     col_send, col_reset = st.columns([5, 1])
@@ -853,6 +853,7 @@ else:
                 {"role": t["role"], "content": t["content"]}
                 for t in st.session_state.chat_history
             ]
+            st.session_state.chat_input_key += 1
             with st.spinner("Thinking..."):
                 result = api_chat(
                     question=chat_question.strip(),

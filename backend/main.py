@@ -27,7 +27,6 @@ from pipeline.retriever  import query as rag_query, extract_action_items, conver
 from pipeline.evaluator  import evaluate_pipeline
 
 from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
-from pipeline.retriever import query as rag_query
 from models import (
     QueryRequest,
     QueryResponse,
