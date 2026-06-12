@@ -1,0 +1,9 @@
+2026-06-12 13:20:51 | INFO | ChromaDB collection found. Pipeline ready.
+2026-06-12 13:22:34 | WARNING | Unauthorized request — invalid API key: None
+2026-06-12 13:22:36 | WARNING | Unauthorized request — invalid API key: None
+2026-06-12 13:26:46 | INFO | GET /meetings
+2026-06-12 13:27:15 | INFO | GET /meetings
+2026-06-12 13:27:44 | INFO | GET /meetings
+2026-06-12 13:27:47 | INFO | POST /query | question=What did we decide about the mobile app launch?
+2026-06-12 13:27:59 | INFO | POST /action-items | question=What did we decide about the mobile app launch?
+2026-06-12 13:28:10 | INFO | POST /evaluate | question=What did we decide about the mobile app launch?

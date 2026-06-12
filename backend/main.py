@@ -3,15 +3,20 @@ main.py — FastAPI application exposing the Meeting Memory Engine pipeline
           as a production-ready REST API.
 
 Endpoints:
-    GET  /health     — liveness check
-    GET  /meetings   — list all indexed meetings
-    POST /ingest     — ingest all transcripts from data/ into ChromaDB
-    POST /query      — ask a question, get a cited answer
+    GET  /health        — liveness check
+    GET  /meetings      — list all indexed meetings
+    POST /ingest        — ingest all transcripts into ChromaDB
+    POST /query         — ask a question, get a cited answer
+    POST /action-items  — extract structured action items
+    POST /evaluate      — evaluate RAG response quality
+    POST /chat          — multi-turn conversational query
 
-Why FastAPI:
-    - Automatic OpenAPI docs at /docs (great for interviews — live demo)
-    - Pydantic validation built in — bad requests never reach the pipeline
-    - Async support — ready to scale if needed
+Production features:
+    - API key authentication on all pipeline endpoints
+    - Rate limiting (10 req/min per IP)
+    - Structured logging via loguru
+    - CORS middleware
+    - Pydantic validation on all request/response schemas
 """
 
 import os
@@ -21,12 +26,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query
-from pipeline.evaluator  import evaluate_pipeline
+from fastapi.security import APIKeyHeader
+from fastapi import Security
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from loguru import logger
 
 from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
+from pipeline.retriever import query as rag_query, extract_action_items, conversational_query
+from pipeline.evaluator import evaluate_pipeline
+
 from models import (
     QueryRequest,
     QueryResponse,
@@ -48,58 +61,76 @@ from models import (
 # ── Environment ───────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+# ── Logging ───────────────────────────────────────────────────────
+logs_dir = Path(__file__).resolve().parent.parent / "logs"
+logs_dir.mkdir(exist_ok=True)
+logger.add(
+    str(logs_dir / "app.log"),
+    rotation="1 day",
+    retention="7 days",
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+)
 
-# ── Lifespan — runs once on startup ──────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────
+APP_API_KEY    = os.getenv("APP_API_KEY", "dev-key-change-in-prod")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(key: str = Security(api_key_header)):
+    if key != APP_API_KEY:
+        logger.warning(f"Unauthorized request — invalid API key: {key}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key. Pass it as X-API-Key header.",
+        )
+
+# ── Rate limiter ──────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+
+
+# ── Lifespan ──────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Verify ChromaDB collection exists on startup.
-    Warns early if transcripts haven't been ingested yet.
-    """
     try:
         client = chromadb.PersistentClient(path=str(CHROMA_PATH))
         client.get_collection("meeting_transcripts")
+        logger.info("ChromaDB collection found. Pipeline ready.")
         print("✅ ChromaDB collection found. Pipeline ready.")
     except Exception:
+        logger.warning("ChromaDB collection not found. Call POST /ingest first.")
         print("⚠️  ChromaDB collection not found. Call POST /ingest first.")
     yield
 
 
-# ── App instance ──────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────
 app = FastAPI(
     title="Meeting Memory Engine",
     description=(
-        "A Temporal RAG pipeline that lets you query your past meeting "
-        "transcripts using natural language. Built with LangChain, ChromaDB, "
-        "Groq (Llama 3.1), and FastAPI."
+        "A Temporal RAG pipeline that lets you query past meeting transcripts "
+        "using natural language. Built with LangChain, ChromaDB, Groq (Llama 3.1), "
+        "and FastAPI."
     ),
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# ── CORS — allows Streamlit frontend to call this API ─────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this in production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ─────────────────────────────────────────────────────────────────
-# GET /health
+# GET /health  — no auth, no rate limit (monitoring tools need this)
 # ─────────────────────────────────────────────────────────────────
-@app.get(
-    "/health",
-    response_model=HealthResponse,
-    summary="Health check",
-    tags=["System"],
-)
+@app.get("/health", response_model=HealthResponse, tags=["System"])
 def health_check() -> HealthResponse:
-    """
-    Liveness check. Also reports whether the ChromaDB
-    collection is ready to serve queries.
-    """
+    """Liveness check. Reports pipeline status."""
     try:
         client = chromadb.PersistentClient(path=str(CHROMA_PATH))
         client.get_collection("meeting_transcripts")
@@ -116,14 +147,13 @@ def health_check() -> HealthResponse:
 @app.get(
     "/meetings",
     response_model=MeetingsResponse,
-    summary="List all indexed meetings",
+    dependencies=[Depends(verify_api_key)],
     tags=["Meetings"],
 )
-def list_meetings() -> MeetingsResponse:
-    """
-    Returns metadata for every meeting indexed in ChromaDB.
-    Useful for the frontend to show available meetings and date ranges.
-    """
+@limiter.limit("30/minute")
+def list_meetings(request: Request) -> MeetingsResponse:
+    """Returns metadata for every indexed meeting."""
+    logger.info("GET /meetings")
     try:
         client     = chromadb.PersistentClient(path=str(CHROMA_PATH))
         collection = client.get_collection("meeting_transcripts")
@@ -134,24 +164,19 @@ def list_meetings() -> MeetingsResponse:
             detail="ChromaDB collection not found. Call POST /ingest first.",
         )
 
-    # Deduplicate by source_file — each transcript = one meeting entry
-    seen     = set()
+    seen = set()
     meetings = []
     for meta in results["metadatas"]:
         src = meta.get("source_file", "")
         if src not in seen:
             seen.add(src)
-            meetings.append(
-                MeetingMeta(
-                    title=meta.get("title", "Unknown"),
-                    date=meta.get("meeting_date", "Unknown"),
-                    source_file=src,
-                )
-            )
+            meetings.append(MeetingMeta(
+                title=meta.get("title", "Unknown"),
+                date=meta.get("meeting_date", "Unknown"),
+                source_file=src,
+            ))
 
-    # Sort by date ascending
     meetings.sort(key=lambda m: m.date)
-
     return MeetingsResponse(total=len(meetings), meetings=meetings)
 
 
@@ -162,16 +187,13 @@ def list_meetings() -> MeetingsResponse:
     "/ingest",
     response_model=IngestResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Ingest all transcripts into ChromaDB",
+    dependencies=[Depends(verify_api_key)],
     tags=["Pipeline"],
 )
-def ingest_transcripts() -> IngestResponse:
-    """
-    Loads all .txt files from data/, chunks them, embeds with
-    HuggingFace all-MiniLM-L6-v2, and stores in ChromaDB.
-
-    Safe to call multiple times — ChromaDB upserts, so no duplicates.
-    """
+@limiter.limit("5/minute")
+def ingest_transcripts(request: Request) -> IngestResponse:
+    """Ingest all transcripts from data/ into ChromaDB."""
+    logger.info("POST /ingest triggered")
     result = ingest_all(DATA_PATH)
 
     if result["status"] == "error":
@@ -180,49 +202,41 @@ def ingest_transcripts() -> IngestResponse:
             detail=result["message"],
         )
 
+    logger.info(f"Ingest complete — {result['files']} files, {result['chunks']} chunks")
     return IngestResponse(**result)
 
 
 # ─────────────────────────────────────────────────────────────────
-# POST /query  ← the core endpoint
+# POST /query
 # ─────────────────────────────────────────────────────────────────
 @app.post(
     "/query",
     response_model=QueryResponse,
-    summary="Ask a question about your meetings",
+    dependencies=[Depends(verify_api_key)],
     tags=["Pipeline"],
 )
-def query_meetings(request: QueryRequest) -> QueryResponse:
+@limiter.limit("10/minute")
+def query_meetings(request: Request, body: QueryRequest) -> QueryResponse:
     """
-    The core RAG endpoint.
-
-    Flow:
-        1. Embed the question using all-MiniLM-L6-v2
-        2. Apply optional temporal filter (date_from / date_to)
-        3. Retrieve top_k most similar chunks from ChromaDB
-        4. Build a cited prompt and call Groq Llama 3.1
-        5. Return the answer + ranked source meetings
-
-    The date filter is applied PRE-retrieval inside ChromaDB —
-    not post-hoc by the LLM — ensuring temporal accuracy.
+    Core RAG endpoint — hybrid search + temporal filter + cited answer.
     """
+    logger.info(f"POST /query | question={body.question[:60]}")
     try:
         result = rag_query(
-            question=request.question,
-            date_from=str(request.date_from) if request.date_from else None,
-            date_to=str(request.date_to)     if request.date_to   else None,
-            top_k=request.top_k,
+            question=body.question,
+            date_from=str(body.date_from) if body.date_from else None,
+            date_to=str(body.date_to)     if body.date_to   else None,
+            top_k=body.top_k,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Pipeline error: {str(e)}",
-        )
+        logger.error(f"Query error: {e}")
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
     return QueryResponse(
         answer=result["answer"],
         sources=[SourceDocument(**s) for s in result["sources"]],
     )
+
 
 # ─────────────────────────────────────────────────────────────────
 # POST /action-items
@@ -230,34 +244,28 @@ def query_meetings(request: QueryRequest) -> QueryResponse:
 @app.post(
     "/action-items",
     response_model=ActionItemsResponse,
-    summary="Extract structured action items from meetings",
+    dependencies=[Depends(verify_api_key)],
     tags=["Pipeline"],
 )
-def get_action_items(request: ActionItemsRequest) -> ActionItemsResponse:
-    """
-    Retrieves relevant meeting chunks and runs a focused LLM call
-    to extract structured action items — owner, task, due date, source.
-
-    Why a separate endpoint from /query:
-        Action item extraction uses a different prompt and returns
-        structured JSON. Combining with /query degrades both outputs.
-    """
+@limiter.limit("10/minute")
+def get_action_items(request: Request, body: ActionItemsRequest) -> ActionItemsResponse:
+    """Extract structured action items from relevant meeting chunks."""
+    logger.info(f"POST /action-items | question={body.question[:60]}")
     try:
         result = extract_action_items(
-            question=request.question,
-            date_from=str(request.date_from) if request.date_from else None,
-            date_to=str(request.date_to)     if request.date_to   else None,
+            question=body.question,
+            date_from=str(body.date_from) if body.date_from else None,
+            date_to=str(body.date_to)     if body.date_to   else None,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Extraction error: {str(e)}",
-        )
+        logger.error(f"Action item extraction error: {e}")
+        raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
     return ActionItemsResponse(
         action_items=[ActionItem(**item) for item in result["action_items"]],
         sources=[SourceDocument(**s) for s in result["sources"]],
     )
+
 
 # ─────────────────────────────────────────────────────────────────
 # POST /evaluate
@@ -265,69 +273,53 @@ def get_action_items(request: ActionItemsRequest) -> ActionItemsResponse:
 @app.post(
     "/evaluate",
     response_model=EvaluationResponse,
-    summary="Evaluate RAG response quality",
+    dependencies=[Depends(verify_api_key)],
     tags=["Pipeline"],
 )
-def evaluate_response(request: EvaluateRequest) -> EvaluationResponse:
-    """
-    Evaluates a RAG response using LLM-as-judge pattern.
-
-    Three metrics:
-        Faithfulness      — are claims grounded in retrieved context?
-        Answer Relevance  — does the answer address the question?
-        Context Precision — are retrieved chunks relevant?
-
-    Why LLM-as-judge over RAGAS:
-        RAGAS requires LangChain 0.2.x which conflicts with our 1.x stack.
-        LLM-as-judge gives identical methodology with zero dependency risk.
-    """
+@limiter.limit("10/minute")
+def evaluate_response(request: Request, body: EvaluateRequest) -> EvaluationResponse:
+    """Evaluate RAG response quality using LLM-as-judge pattern."""
+    logger.info(f"POST /evaluate | question={body.question[:60]}")
     try:
         result = evaluate_pipeline(
-            question=request.question,
-            answer=request.answer,
-            contexts=request.contexts,
+            question=body.question,
+            answer=body.answer,
+            contexts=body.contexts,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Evaluation error: {str(e)}",
-        )
+        logger.error(f"Evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Evaluation error: {str(e)}")
 
     return EvaluationResponse(**result)
 
+
 # ─────────────────────────────────────────────────────────────────
-# POST /chat  ← conversational multi-turn endpoint
+# POST /chat
 # ─────────────────────────────────────────────────────────────────
 @app.post(
     "/chat",
     response_model=QueryResponse,
-    summary="Multi-turn conversational query with memory",
+    dependencies=[Depends(verify_api_key)],
     tags=["Pipeline"],
 )
-def chat(request: ConversationalQueryRequest) -> QueryResponse:
+@limiter.limit("10/minute")
+def chat(request: Request, body: ConversationalQueryRequest) -> QueryResponse:
     """
-    Conversational RAG endpoint with memory.
-
-    Accepts full conversation history on every request.
-    Why stateless history (client sends history each time):
-        Stateful server-side memory breaks horizontal scaling
-        and makes the API harder to test. Passing history from
-        the client on every request is the correct REST pattern —
-        the backend stays stateless, the frontend owns the state.
+    Multi-turn conversational RAG with memory.
+    Stateless backend — client sends full history on every request.
     """
+    logger.info(f"POST /chat | question={body.question[:60]} | history_turns={len(body.history)}")
     try:
         result = conversational_query(
-            question=request.question,
-            history=[t.model_dump() for t in request.history],
-            date_from=str(request.date_from) if request.date_from else None,
-            date_to=str(request.date_to)     if request.date_to   else None,
-            top_k=request.top_k,
+            question=body.question,
+            history=[t.model_dump() for t in body.history],
+            date_from=str(body.date_from) if body.date_from else None,
+            date_to=str(body.date_to)     if body.date_to   else None,
+            top_k=body.top_k,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Chat error: {str(e)}",
-        )
+        logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
     return QueryResponse(
         answer=result["answer"],
