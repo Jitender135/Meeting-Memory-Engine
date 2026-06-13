@@ -3,7 +3,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
+# HuggingFace replaced by Jina API embeddings for deployment compatibility
 from langchain_core.prompts import PromptTemplate
 import chromadb
 from rank_bm25 import BM25Okapi
@@ -35,10 +35,20 @@ Answer (with meeting citations):
 
 
 def get_embedding_function():
-    """Same embedding model used during ingest — must match."""
-    return HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
+    """
+    Jina AI embeddings — API-based, no local model download.
+    Why Jina over local HuggingFace for deployment:
+        Local HuggingFace models require 400-500MB RAM to load.
+        Free tier servers cap at 512MB total — causes OOM crash.
+        Jina API uses <10MB RAM, deployable on any free tier.
+        jina-embeddings-v2-base-en outperforms all-MiniLM-L6-v2
+        on retrieval benchmarks.
+    """
+    import os
+    from langchain_community.embeddings import JinaEmbeddings
+    return JinaEmbeddings(
+        jina_api_key=os.getenv("JINA_API_KEY"),
+        model_name="jina-embeddings-v2-base-en",
     )
 
 

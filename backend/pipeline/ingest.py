@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from docx import Document as DocxDocument
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+# HuggingFace replaced by Jina API embeddings for deployment compatibility
 
 # ── Environment ───────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -179,17 +179,21 @@ def chunk_documents(docs: list[Document]) -> list[Document]:
 # EMBEDDING
 # ─────────────────────────────────────────────────────────────────
 
-def get_embedding_function() -> HuggingFaceEmbeddings:
+def get_embedding_function():
     """
-    Local HuggingFace embedding model — no API key, no cost, runs on CPU.
-    all-MiniLM-L6-v2 is the standard choice for semantic search:
-      - 384-dimension vectors (compact, fast)
-      - Strong performance on retrieval benchmarks
-      - Downloads once, cached locally after first run
+    Jina AI embeddings — API-based, no local model download.
+    Why Jina over local HuggingFace for deployment:
+        Local HuggingFace models require 400-500MB RAM to load.
+        Free tier servers cap at 512MB total — causes OOM crash.
+        Jina API uses <10MB RAM, deployable on any free tier.
+        jina-embeddings-v2-base-en outperforms all-MiniLM-L6-v2
+        on retrieval benchmarks.
     """
-    return HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
+    import os
+    from langchain_community.embeddings import JinaEmbeddings
+    return JinaEmbeddings(
+        jina_api_key=os.getenv("JINA_API_KEY"),
+        model_name="jina-embeddings-v2-base-en",
     )
 
 
