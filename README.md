@@ -2,6 +2,9 @@
 
 > A **Temporal RAG (Retrieval-Augmented Generation)** pipeline that lets you query your past meeting transcripts using natural language — with cited, time-accurate answers.
 
+**Live App:** https://meeting-memory-engine-n5iyrh3cmnjkvd5scvnnpn.streamlit.app
+**Live API:** https://meeting-memory-engine.onrender.com/docs
+
 ---
 
 ## 💡 The Problem
