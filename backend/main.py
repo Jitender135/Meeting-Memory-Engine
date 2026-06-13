@@ -97,8 +97,16 @@ async def lifespan(app: FastAPI):
         logger.info("ChromaDB collection found. Pipeline ready.")
         print("✅ ChromaDB collection found. Pipeline ready.")
     except Exception:
-        logger.warning("ChromaDB collection not found. Call POST /ingest first.")
-        print("⚠️  ChromaDB collection not found. Call POST /ingest first.")
+        logger.warning("ChromaDB collection not found. Auto-ingesting...")
+        print("⚠️  ChromaDB collection not found. Auto-ingesting on startup...")
+        try:
+            from pipeline.ingest import ingest_all, DATA_PATH
+            result = ingest_all(DATA_PATH)
+            logger.info(f"Auto-ingest complete: {result}")
+            print(f"✅ Auto-ingest complete: {result['files']} files, {result['chunks']} chunks")
+        except Exception as e:
+            logger.error(f"Auto-ingest failed: {e}")
+            print(f"❌ Auto-ingest failed: {e}")
     yield
 
 
