@@ -474,7 +474,7 @@ div[data-testid="column"]:last-child .stButton > button {
 
 # ── Constants ──────────────────────────────────────────────────────
 import os
-API_BASE = os.getenv("API_BASE", "http://localhost:8000")
+API_BASE = "https://meeting-memory-engine.onrender.com"
 
 
 # ── API helpers ────────────────────────────────────────────────────
