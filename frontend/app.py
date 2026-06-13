@@ -4,7 +4,7 @@ Design: Monochrome internal tool. No gradients, no emojis in UI, no AI aesthetic
 Inspired by Linear, Vercel, Raycast.
 """
 
-import httpx
+import requests
 import streamlit as st
 from datetime import date
 
@@ -480,21 +480,26 @@ API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 # ── API helpers ────────────────────────────────────────────────────
 HEADERS = {"X-API-Key": "mme-secret-2024"}
 
-# Force IPv4 — Streamlit Cloud has IPv6 issues with external APIs
-import httpx
-transport = httpx.HTTPTransport(local_address="0.0.0.0")
-client = httpx.Client(transport=transport, timeout=30)
+import requests
+import socket
 
+# Streamlit Cloud requires explicit IPv4 connection
+def get_client():
+    return httpx.Client(
+        timeout=30,
+        transport=httpx.HTTPTransport(uds=None),
+        verify=True,
+    )
 def api_health() -> dict:
     try:
-        r = client.get(f"{API_BASE}/health", timeout=5)
+        r = requests.get(f"{API_BASE}/health", timeout=10)
         return r.json()
     except Exception:
         return {"status": "error", "pipeline": "unreachable"}
 
 def api_meetings() -> list:
     try:
-        r = client.get(f"{API_BASE}/meetings", headers=HEADERS, timeout=5)
+        r = requests.get(f"{API_BASE}/meetings", headers=HEADERS, timeout=10)
         return r.json().get("meetings", [])
     except Exception:
         return []
@@ -504,7 +509,7 @@ def api_query(question: str, date_from=None, date_to=None, top_k=3) -> dict:
     if date_from: payload["date_from"] = str(date_from)
     if date_to:   payload["date_to"]   = str(date_to)
     try:
-        r = client.post(f"{API_BASE}/query", json=payload, headers=HEADERS, timeout=30)
+        r = requests.post(f"{API_BASE}/query", json=payload, headers=HEADERS, timeout=30)
         return r.json()
     except Exception as e:
         return {"error": str(e)}
@@ -514,21 +519,21 @@ def api_action_items(question: str, date_from=None, date_to=None) -> dict:
     if date_from: payload["date_from"] = str(date_from)
     if date_to:   payload["date_to"]   = str(date_to)
     try:
-        r = client.post(f"{API_BASE}/action-items", json=payload, headers=HEADERS, timeout=30)
+        r = requests.post(f"{API_BASE}/action-items", json=payload, headers=HEADERS, timeout=30)
         return r.json()
     except Exception as e:
         return {"error": str(e)}
 
 def api_ingest() -> dict:
     try:
-        r = client.post(f"{API_BASE}/ingest", headers=HEADERS, timeout=60)
+        r = requests.post(f"{API_BASE}/ingest", headers=HEADERS, timeout=60)
         return r.json()
     except Exception as e:
         return {"error": str(e)}
 
 def api_evaluate(question: str, answer: str, contexts: list) -> dict:
     try:
-        r = client.post(
+        r = requests.post(
             f"{API_BASE}/evaluate",
             json={"question": question, "answer": answer, "contexts": contexts},
             headers=HEADERS,
@@ -543,7 +548,7 @@ def api_chat(question: str, history: list, date_from=None, date_to=None, top_k=3
     if date_from: payload["date_from"] = str(date_from)
     if date_to:   payload["date_to"]   = str(date_to)
     try:
-        r = client.post(f"{API_BASE}/chat", json=payload, headers=HEADERS, timeout=30)
+        r = requests.post(f"{API_BASE}/chat", json=payload, headers=HEADERS, timeout=30)
         return r.json()
     except Exception as e:
         return {"error": str(e)}
