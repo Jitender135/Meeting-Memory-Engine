@@ -136,7 +136,7 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────
 # GET /health  — no auth, no rate limit (monitoring tools need this)
 # ─────────────────────────────────────────────────────────────────
-@app.get("/health", response_model=HealthResponse, tags=["System"])
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse, tags=["System"])
 def health_check() -> HealthResponse:
     """Liveness check. Reports pipeline status."""
     try:
