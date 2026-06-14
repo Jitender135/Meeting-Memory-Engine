@@ -611,3 +611,94 @@ if __name__ == "__main__":
     print(f"Found {len(result['action_items'])} action items:")
     for item in result["action_items"]:
         print(f"  - [{item.get('owner')}] {item.get('task')} (due: {item.get('due')})")
+
+
+# ─────────────────────────────────────────────────────────────────
+# MEETING SUMMARY
+# ─────────────────────────────────────────────────────────────────
+
+SUMMARY_PROMPT = """
+You are a precise meeting assistant. Summarize the following meeting transcript
+into three clear sections.
+
+Meeting Transcript:
+{context}
+
+Return ONLY a JSON object in this exact format — no preamble, no explanation:
+
+{{
+  "title": "Meeting title",
+  "date": "YYYY-MM-DD",
+  "key_decisions": ["decision 1", "decision 2", ...],
+  "action_items": ["action item 1", "action item 2", ...],
+  "open_questions": ["open question 1", ...]
+}}
+
+If a section has nothing, return an empty array for it.
+"""
+
+
+def get_meeting_summary(meeting_date: str) -> dict:
+    """
+    Generate a structured summary for a specific meeting by date.
+
+    Args:
+        meeting_date — "YYYY-MM-DD" format
+
+    Returns:
+        dict with title, date, key_decisions, action_items, open_questions
+        or {"status": "error", "message": ...} if meeting not found
+    """
+    from datetime import datetime
+
+    try:
+        ts = int(datetime.strptime(meeting_date, "%Y-%m-%d").timestamp())
+    except ValueError:
+        return {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD."}
+
+    client     = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    collection = client.get_collection("meeting_transcripts")
+
+    results = collection.get(
+        where={"meeting_timestamp": ts},
+        include=["documents", "metadatas"],
+    )
+
+    if not results["documents"]:
+        return {"status": "error", "message": f"No meeting found for date {meeting_date}."}
+
+    # Combine all chunks for this meeting into one context
+    full_text = "\n\n".join(results["documents"])
+    title     = results["metadatas"][0].get("title", "Unknown Meeting")
+
+    llm      = get_llm()
+    response = llm.invoke(SUMMARY_PROMPT.format(context=full_text))
+
+    import json
+    import re
+
+    raw = response.content.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$",          "", raw)
+
+    try:
+        summary = json.loads(raw)
+    except json.JSONDecodeError:
+        summary = {
+            "title": title,
+            "date": meeting_date,
+            "key_decisions": [],
+            "action_items": [],
+            "open_questions": [],
+        }
+
+    summary["status"] = "success"
+    return summary
+
+
+# ── Test directly ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("\n=== Meeting Summary Test ===")
+    result = get_meeting_summary("2024-01-15")
+    import json
+    print(json.dumps(result, indent=2))

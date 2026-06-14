@@ -39,7 +39,7 @@ from loguru import logger
 
 from pipeline.ingest      import ingest_all, DATA_PATH, CHROMA_PATH
 from pipeline.transcriber import transcribe_audio, save_transcript, SUPPORTED_AUDIO_FORMATS
-from pipeline.retriever import query as rag_query, extract_action_items, conversational_query
+from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query, get_meeting_summary
 from pipeline.evaluator import evaluate_pipeline
 
 from models import (
@@ -59,6 +59,7 @@ from models import (
     ConversationTurn,
     ConversationalQueryRequest,
     TranscribeResponse,
+    MeetingSummaryResponse,
 )
 
 # ── Environment ───────────────────────────────────────────────────
@@ -410,3 +411,35 @@ def transcribe_meeting(
         ingested=ingested,
         chunks_added=chunks_added,
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# GET /summary/{meeting_date}
+# ─────────────────────────────────────────────────────────────────
+@app.get(
+    "/summary/{meeting_date}",
+    response_model=MeetingSummaryResponse,
+    dependencies=[Depends(verify_api_key)],
+    tags=["Pipeline"],
+)
+@limiter.limit("10/minute")
+def meeting_summary(request: Request, meeting_date: str) -> MeetingSummaryResponse:
+    """
+    Generate a structured summary for a specific meeting by date.
+
+    Path parameter: meeting_date in YYYY-MM-DD format.
+
+    Returns key decisions, action items, and open questions
+    extracted from that meeting's full transcript.
+    """
+    logger.info(f"GET /summary/{meeting_date}")
+    try:
+        result = get_meeting_summary(meeting_date)
+    except Exception as e:
+        logger.error(f"Summary error: {e}")
+        raise HTTPException(status_code=500, detail=f"Summary error: {str(e)}")
+
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message", "Meeting not found."))
+
+    return MeetingSummaryResponse(**result)

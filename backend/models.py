@@ -192,3 +192,13 @@ class TranscribeResponse(BaseModel):
     transcript:    str = Field(description="The transcribed text.")
     ingested:      bool = Field(description="Whether the transcript was auto-ingested.")
     chunks_added:  int  = Field(default=0, description="Number of chunks added to ChromaDB.")
+
+class MeetingSummaryResponse(BaseModel):
+    """Response payload for GET /summary/{meeting_date}"""
+    status:         str       = Field(description="'success' or 'error'")
+    title:          str       = Field(default="", description="Meeting title.")
+    date:           str       = Field(default="", description="Meeting date.")
+    key_decisions:  list[str] = Field(default=[], description="Key decisions made in this meeting.")
+    action_items:   list[str] = Field(default=[], description="Action items from this meeting.")
+    open_questions: list[str] = Field(default=[], description="Unresolved questions from this meeting.")
+    message:        str       = Field(default="", description="Error message if status is 'error'.")
