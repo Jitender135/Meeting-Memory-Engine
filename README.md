@@ -16,7 +16,7 @@ After months of meetings, nobody remembers what was decided, who committed to wh
 
 **Meeting Memory Engine fixes that.**
 
-Upload your meeting transcripts and ask:
+Record or upload your meeting transcripts and ask:
 - *"What did we decide about the mobile app launch?"*
 - *"What action items were assigned to Rahul in Q1?"*
 - *"Summarise all decisions made before the product pivot."*
@@ -29,59 +29,67 @@ Get cited, accurate answers with the meeting date and source — instantly.
 ## Architecture
 
 ```
-Transcripts (TXT / PDF / DOCX)
-        │
-        ▼
-┌─────────────────────────────────┐
-│   Multi-format Document Loader  │  Supports .txt .pdf .docx
-│   + Metadata Tagger             │  Attaches meeting_date, title,
-│                                 │  participants, source_file, format
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   Text Chunker                  │  RecursiveCharacterTextSplitter
-│   chunk=500 / overlap=50        │  Splits on paragraphs → sentences → words
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   Jina AI Embeddings            │  jina-embeddings-v2-base-en
-│   (API-based, no local model)   │  <10MB RAM vs 500MB for local models
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   ChromaDB Vector Store         │  Stores vectors + raw text + metadata
-│   (persisted to disk)           │  Enables pre-retrieval date filtering
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   Hybrid Retriever              │  BM25 keyword search
-│   BM25 + Semantic + RRF         │  + Semantic vector search
-│   + Temporal Pre-filter         │  + Reciprocal Rank Fusion
-│                                 │  Date filter applied BEFORE similarity search
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   Groq — Llama 3.1 8b Instant  │  Generates cited, grounded answers
-│                                 │  temperature=0.2 for factual output
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   FastAPI REST API              │  7 endpoints, API key auth,
-│                                 │  rate limiting, structured logging
-└───────────────┬─────────────────┘
-                │
-                ▼
-┌─────────────────────────────────┐
-│   Streamlit UI                  │  Search mode + Chat mode
-│                                 │  Answer + Sources + Action Items
-│                                 │  + Pipeline Quality scores
-└─────────────────────────────────┘
+Audio Recording (mp3/wav/m4a)        Transcripts (TXT / PDF / DOCX)
+        │                                     │
+        ▼                                     │
+┌─────────────────────────────────┐           │
+│   Groq Whisper Transcription    │           │
+│   (whisper-large-v3)            │           │
+└───────────────┬─────────────────┘           │
+                │                             │
+                └──────────────┬──────────────┘
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Multi-format Document Loader  │  Supports .txt .pdf .docx
+                │   + Metadata Tagger             │  Attaches meeting_date, title,
+                │                                 │  participants, source_file, format
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Text Chunker                  │  RecursiveCharacterTextSplitter
+                │   chunk=500 / overlap=50        │  Splits on paragraphs → sentences → words
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Jina AI Embeddings            │  jina-embeddings-v2-base-en
+                │   (API-based, no local model)   │  <10MB RAM vs 500MB for local models
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   ChromaDB Vector Store         │  Stores vectors + raw text + metadata
+                │   (persisted to disk)           │  Enables pre-retrieval date filtering
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Hybrid Retriever              │  BM25 keyword search
+                │   BM25 + Semantic + RRF         │  + Semantic vector search
+                │   + Temporal Pre-filter         │  + Reciprocal Rank Fusion
+                │                                 │  Date filter applied BEFORE similarity search
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Groq — Llama 3.1 8b Instant  │  Generates cited, grounded answers
+                │                                 │  temperature=0.2 for factual output
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   FastAPI REST API              │  9 endpoints, API key auth,
+                │                                 │  rate limiting, structured logging
+                └───────────────┬─────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────┐
+                │   Streamlit UI                  │  Search mode + Chat mode
+                │                                 │  Answer + Sources + Action Items
+                │                                 │  + Pipeline Quality scores
+                │                                 │  + Audio upload + Meeting summaries
+                └─────────────────────────────────┘
 ```
 
 ---
@@ -95,9 +103,10 @@ Transcripts (TXT / PDF / DOCX)
 | Embeddings | Jina AI `jina-embeddings-v2-base-en` | API-based, zero RAM overhead, free tier compatible |
 | Keyword Search | BM25 via rank-bm25 | Catches exact matches semantic search misses |
 | LLM | Groq — Llama 3.1 8b Instant | Fast free inference, 8192 token context |
+| Audio Transcription | Groq Whisper `whisper-large-v3` | Free, API-based, near-perfect quality for clear speech |
 | API Layer | FastAPI + Pydantic | REST endpoints, auto OpenAPI docs, request validation |
 | Auth | API Key Header (X-API-Key) | Protects all pipeline endpoints |
-| Rate Limiting | slowapi | 10 requests/minute per IP |
+| Rate Limiting | slowapi | Per-endpoint limits, per IP |
 | Logging | loguru | Structured logs, daily rotation, 7-day retention |
 | Frontend | Streamlit | Clean internal tool UI, calls FastAPI via HTTP |
 | Containerisation | Docker + docker-compose | Consistent builds, deployable anywhere |
@@ -116,14 +125,16 @@ Transcripts (TXT / PDF / DOCX)
 - **Cited Answers** — every answer includes the meeting title and date it was sourced from.
 
 ### Advanced Features
-- **Action Item Extractor** — second focused LLM call extracts structured action items (owner, task, due date, meeting). Returns as a clean table in the UI. Deduplicated at the prompt level to prevent duplicate entries from overlapping chunks.
+- **Audio Transcription** — upload a meeting recording (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.webm`) and it's transcribed via Groq Whisper, saved as a transcript, and auto-ingested into ChromaDB. Completes the product loop: record meeting → upload → query immediately.
+- **Meeting Summaries** — per-meeting structured summary endpoint extracting key decisions, action items, and open questions from the full transcript in one LLM call.
+- **Action Item Extractor** — second focused LLM call extracts structured action items (owner, task, due date, meeting) across all meetings. Returns as a clean table in the UI. Deduplicated at the prompt level to prevent duplicate entries from overlapping chunks.
 - **Conversational Memory** — multi-turn chat mode. Ask a question then follow up with "Who was responsible for that?" — the LLM resolves references using conversation history. Stateless backend pattern: history sent by client on every request, no server-side session storage.
 - **Custom RAG Evaluator** — LLM-as-judge pattern measuring three metrics: Faithfulness, Answer Relevance, Context Precision. Built custom instead of RAGAS due to hard dependency conflicts (RAGAS requires LangChain 0.2.x, this project uses 1.x). Three independent LLM calls — one per metric — to avoid score anchoring.
 - **Auto-ingest on Startup** — if ChromaDB collection is missing on startup (e.g. after free tier restart), the server automatically ingests all transcripts from `data/`.
 
 ### Production Hardening
 - API key authentication on all pipeline endpoints (`X-API-Key` header)
-- Rate limiting: 10 requests/minute per IP
+- Rate limiting per endpoint, per IP
 - Structured logging: every request logged with timestamp, method, question preview
 - CORS middleware configured
 - Health check endpoint reporting pipeline status
@@ -138,11 +149,13 @@ Transcripts (TXT / PDF / DOCX)
 |---|---|---|---|---|
 | GET | `/health` | None | None | Liveness check + pipeline status |
 | GET | `/meetings` | Required | 30/min | List all indexed meetings |
+| GET | `/summary/{meeting_date}` | Required | 10/min | Structured summary — decisions, action items, open questions |
 | POST | `/ingest` | Required | 5/min | Ingest transcripts into ChromaDB |
 | POST | `/query` | Required | 10/min | Ask a question, get a cited answer |
 | POST | `/action-items` | Required | 10/min | Extract structured action items |
 | POST | `/evaluate` | Required | 10/min | Evaluate RAG response quality |
 | POST | `/chat` | Required | 10/min | Multi-turn conversational query |
+| POST | `/transcribe` | Required | 5/min | Upload audio recording — Whisper transcription + auto-ingest |
 
 ### POST /query — Example
 
@@ -186,6 +199,53 @@ Content-Type: application/json
 }
 ```
 
+### GET /summary/{meeting_date} — Example
+
+**Request:**
+```
+GET /summary/2024-01-15
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "title": "Q1 Product Planning",
+  "date": "2024-01-15",
+  "key_decisions": [
+    "Prioritize onboarding flow redesign in Q1",
+    "Delay mobile app launch from February to April"
+  ],
+  "action_items": [
+    "Amit: Onboarding prototype by Feb 10",
+    "Sarah: Retention dashboard by Jan 22",
+    "Priya: User interviews with 10 churned users by Jan 30"
+  ],
+  "open_questions": []
+}
+```
+
+### POST /transcribe — Example
+
+**Request (multipart/form-data):**
+```
+file: meeting_recording.mp3
+meeting_title: "Q4 Planning Sync"
+meeting_date: "2024-12-05"
+auto_ingest: true
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "filename": "meeting_2024_12_05.txt",
+  "transcript": "Okay team, let's go over today's action items...",
+  "ingested": true,
+  "chunks_added": 13
+}
+```
+
 ---
 
 ## Key Design Decisions
@@ -207,6 +267,9 @@ A pipeline inside Streamlit is a demo. A pipeline behind a REST endpoint is a se
 
 **Why Jina AI embeddings instead of local HuggingFace?**
 Local HuggingFace models require 400-500MB RAM. Render free tier caps at 512MB total — causes OOM crashes. Jina API-based embeddings use less than 10MB RAM and perform comparably on retrieval benchmarks for clean professional text.
+
+**Why Groq Whisper for audio transcription?**
+Groq's Whisper API is free using the same API key already used for the LLM. whisper-large-v3 offers near-perfect transcription for clear speech at zero cost — avoids the RAM overhead of local Whisper models, consistent with the embeddings decision above.
 
 **Why custom RAG evaluator instead of RAGAS?**
 RAGAS requires LangChain 0.2.x which conflicts hard with our 1.x stack. The LLM-as-judge pattern gives identical methodology with zero dependency risk. Three independent LLM calls avoid score anchoring. This also shows problem-solving judgment rather than just package installation.
@@ -272,6 +335,8 @@ data/
 └── meeting_2024_06_10.docx
 ```
 
+Or upload an audio recording directly through the UI — it's transcribed and ingested automatically.
+
 ### 6. Ingest transcripts
 
 ```bash
@@ -315,21 +380,22 @@ docker-compose up --build
 meeting-memory-engine/
 ├── backend/
 │   ├── pipeline/
-│   │   ├── ingest.py       # Multi-format loader, chunker, Jina embeddings, ChromaDB
-│   │   ├── retriever.py    # Hybrid search, temporal RAG, action extractor, chat memory
-│   │   └── evaluator.py    # LLM-as-judge evaluation — faithfulness, relevance, precision
-│   ├── main.py             # FastAPI — 7 endpoints, auth, rate limiting, logging, auto-ingest
-│   └── models.py           # Pydantic schemas for all request/response payloads
+│   │   ├── ingest.py        # Multi-format loader, chunker, Jina embeddings, ChromaDB
+│   │   ├── retriever.py     # Hybrid search, temporal RAG, action extractor, summaries, chat memory
+│   │   ├── evaluator.py     # LLM-as-judge evaluation — faithfulness, relevance, precision
+│   │   └── transcriber.py   # Audio transcription via Groq Whisper
+│   ├── main.py              # FastAPI — 9 endpoints, auth, rate limiting, logging, auto-ingest
+│   └── models.py            # Pydantic schemas for all request/response payloads
 ├── frontend/
-│   ├── app.py              # Streamlit UI — Search mode + Chat mode
-│   └── requirements.txt    # Frontend-only dependencies for Streamlit Cloud
-├── data/                   # Drop .txt / .pdf / .docx transcripts here
-├── Dockerfile              # Container definition
-├── docker-compose.yml      # Multi-service local orchestration
-├── render.yaml             # Render deployment configuration
-├── .env                    # API keys — never committed to Git
+│   ├── app.py               # Streamlit UI — Search mode + Chat mode + audio upload
+│   └── requirements.txt     # Frontend-only dependencies for Streamlit Cloud
+├── data/                    # Drop .txt / .pdf / .docx transcripts here
+├── Dockerfile               # Container definition
+├── docker-compose.yml       # Multi-service local orchestration
+├── render.yaml              # Render deployment configuration
+├── .env                     # API keys — never committed to Git
 ├── .gitignore
-└── requirements.txt        # Backend dependencies
+└── requirements.txt         # Backend dependencies
 ```
 
 ---
@@ -341,6 +407,7 @@ meeting-memory-engine/
 - **Free tier cold starts** — UptimeRobot minimises sleep but restarts still happen occasionally. First request after restart triggers auto-ingest (~30 seconds).
 - **Shared API key** — single key for all users. Multi-tenant auth would need user management (out of scope).
 - **Hallucination risk** — mitigated by citation requirement in prompt and low temperature, but not eliminated for ambiguous chunks.
+- **Re-ingest on transcribe** — `/transcribe` re-ingests all transcripts to keep ChromaDB consistent. Fine at current scale; would need incremental indexing at higher volume.
 
 ---
 
@@ -348,4 +415,4 @@ meeting-memory-engine/
 
 Built by [Jitender Singh](https://github.com/Jitender135)
 
-**Stack:** LangChain · ChromaDB · Jina AI · Groq · FastAPI · Streamlit · Docker · Render · Streamlit Cloud
+**Stack:** LangChain · ChromaDB · Jina AI · Groq (LLM + Whisper) · FastAPI · Streamlit · Docker · Render · Streamlit Cloud
