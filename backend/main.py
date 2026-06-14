@@ -26,7 +26,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, status, Request, Depends
+from fastapi import FastAPI, HTTPException, status, Request, Depends, UploadFile, File, Form
+from typing import Optional as OptionalType
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from fastapi import Security
@@ -36,7 +37,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from loguru import logger
 
-from pipeline.ingest    import ingest_all, DATA_PATH, CHROMA_PATH
+from pipeline.ingest      import ingest_all, DATA_PATH, CHROMA_PATH
+from pipeline.transcriber import transcribe_audio, save_transcript, SUPPORTED_AUDIO_FORMATS
 from pipeline.retriever import query as rag_query, extract_action_items, conversational_query
 from pipeline.evaluator import evaluate_pipeline
 
@@ -56,6 +58,7 @@ from models import (
     EvaluateRequest,
     ConversationTurn,
     ConversationalQueryRequest,
+    TranscribeResponse,
 )
 
 # ── Environment ───────────────────────────────────────────────────
@@ -332,4 +335,78 @@ def chat(request: Request, body: ConversationalQueryRequest) -> QueryResponse:
     return QueryResponse(
         answer=result["answer"],
         sources=[SourceDocument(**s) for s in result["sources"]],
+    )
+
+# ─────────────────────────────────────────────────────────────────
+# POST /transcribe
+# ─────────────────────────────────────────────────────────────────
+@app.post(
+    "/transcribe",
+    response_model=TranscribeResponse,
+    dependencies=[Depends(verify_api_key)],
+    tags=["Pipeline"],
+)
+@limiter.limit("5/minute")
+def transcribe_meeting(
+    request: Request,
+    file: UploadFile = File(...),
+    meeting_title: str = Form("Recorded Meeting"),
+    meeting_date: OptionalType[str] = Form(None),
+    auto_ingest: bool = Form(True),
+) -> TranscribeResponse:
+    """
+    Upload an audio recording of a meeting — transcribes it using
+    Groq Whisper, saves it as a transcript, and optionally auto-ingests
+    into ChromaDB.
+
+    Supported formats: mp3, wav, m4a, flac, ogg, webm
+
+    Why this completes the product story:
+        Without this, users need pre-made text transcripts.
+        With this, the flow becomes: record meeting -> upload audio
+        -> ask questions. End-to-end, no manual transcription step.
+    """
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in SUPPORTED_AUDIO_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported audio format '{suffix}'. "
+                   f"Supported: {', '.join(SUPPORTED_AUDIO_FORMATS)}",
+        )
+
+    logger.info(f"POST /transcribe | file={file.filename} | title={meeting_title}")
+
+    try:
+        audio_bytes = file.file.read()
+        transcript  = transcribe_audio(audio_bytes, file.filename)
+
+        save_result = save_transcript(
+            transcript_text=transcript,
+            meeting_title=meeting_title,
+            meeting_date=meeting_date,
+        )
+
+        chunks_added = 0
+        ingested     = False
+        if auto_ingest:
+            ingest_result = ingest_all(DATA_PATH)
+            if ingest_result["status"] == "success":
+                ingested     = True
+                chunks_added = ingest_result["chunks"]
+
+        logger.info(f"Transcription complete | filename={save_result['filename']} | ingested={ingested}")
+
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transcription error: {str(e)}",
+        )
+
+    return TranscribeResponse(
+        status="success",
+        filename=save_result["filename"],
+        transcript=transcript,
+        ingested=ingested,
+        chunks_added=chunks_added,
     )

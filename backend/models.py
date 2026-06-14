@@ -184,3 +184,11 @@ class ConversationalQueryRequest(BaseModel):
     date_from: Optional[date] = Field(default=None)
     date_to:   Optional[date] = Field(default=None)
     top_k:     int            = Field(default=3, ge=1, le=10)
+
+class TranscribeResponse(BaseModel):
+    """Response payload for POST /transcribe"""
+    status:        str = Field(description="'success' or 'error'")
+    filename:       str = Field(description="Saved transcript filename.")
+    transcript:    str = Field(description="The transcribed text.")
+    ingested:      bool = Field(description="Whether the transcript was auto-ingested.")
+    chunks_added:  int  = Field(default=0, description="Number of chunks added to ChromaDB.")

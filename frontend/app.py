@@ -474,7 +474,7 @@ div[data-testid="column"]:last-child .stButton > button {
 
 # ── Constants ──────────────────────────────────────────────────────
 import os
-API_BASE = "https://meeting-memory-engine.onrender.com"
+API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 
 # ── API helpers ────────────────────────────────────────────────────
@@ -552,6 +552,23 @@ def api_chat(question: str, history: list, date_from=None, date_to=None, top_k=3
         return r.json()
     except Exception as e:
         return {"error": str(e)}
+    
+def api_transcribe(file_bytes: bytes, filename: str, meeting_title: str, meeting_date: str = None) -> dict:
+    files = {"file": (filename, file_bytes)}
+    data  = {"meeting_title": meeting_title, "auto_ingest": "true"}
+    if meeting_date:
+        data["meeting_date"] = meeting_date
+    try:
+        r = requests.post(
+            f"{API_BASE}/transcribe",
+            files=files,
+            data=data,
+            headers=HEADERS,
+            timeout=120,
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── Session state ──────────────────────────────────────────────────
 if "history"       not in st.session_state: st.session_state.history       = []
@@ -583,6 +600,34 @@ with st.sidebar:
         st.markdown('<div class="status-row"><div class="dot-yellow"></div>API connected &middot; Not ingested</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="status-row"><div class="dot-red"></div>API unreachable</div>', unsafe_allow_html=True)
+
+    # ── Audio upload ──────────────────────────────────────────────
+    st.markdown('<span class="nav-label">Add Meeting</span>', unsafe_allow_html=True)
+    uploaded_audio = st.file_uploader(
+        "Upload recording",
+        type=["mp3", "wav", "m4a", "flac", "ogg", "webm"],
+        label_visibility="collapsed",
+    )
+    if uploaded_audio:
+        meeting_title_input = st.text_input("Meeting title", value="Recorded Meeting", key="audio_title")
+        meeting_date_input  = st.date_input("Meeting date", value=date.today(), key="audio_date")
+
+        if st.button("Transcribe & Index", use_container_width=True, key="transcribe_btn"):
+            with st.spinner("Transcribing audio — this takes 10-20 seconds..."):
+                result = api_transcribe(
+                    file_bytes=uploaded_audio.getvalue(),
+                    filename=uploaded_audio.name,
+                    meeting_title=meeting_title_input,
+                    meeting_date=str(meeting_date_input),
+                )
+            if "error" in result:
+                st.error(result["error"])
+            elif "chunks_added" not in result:
+                st.error(f"Unexpected response: {result}")
+            else:
+                st.success(f"Transcribed and indexed — {result['chunks_added']} total chunks")
+                with st.expander("View transcript"):
+                    st.write(result["transcript"])
 
     # Re-ingest
     st.markdown('<span class="nav-label">Pipeline</span>', unsafe_allow_html=True)
