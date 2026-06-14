@@ -8,6 +8,8 @@ A production-ready **Temporal RAG (Retrieval-Augmented Generation)** system that
 
 > Note: Hosted on free tier. If the API is sleeping, click "Wake up server" in the sidebar and wait ~30 seconds. UptimeRobot pings the server every 5 minutes to minimise this.
 
+> **In progress:** A new React + Tailwind frontend (`frontend-react/`) is being built to replace the Streamlit UI with a modern, light SaaS interface. Search mode and Chat mode (with conversational memory) are complete and running locally. Audio upload, meeting summary cards, and live deployment are coming next. The Streamlit app above remains the live, deployed version in the meantime.
+
 ---
 
 ## The Problem
@@ -387,8 +389,12 @@ meeting-memory-engine/
 │   ├── main.py              # FastAPI — 9 endpoints, auth, rate limiting, logging, auto-ingest
 │   └── models.py            # Pydantic schemas for all request/response payloads
 ├── frontend/
-│   ├── app.py               # Streamlit UI — Search mode + Chat mode + audio upload
+│   ├── app.py               # Streamlit UI — Search mode + Chat mode + audio upload (live)
 │   └── requirements.txt     # Frontend-only dependencies for Streamlit Cloud
+├── frontend-react/          # New React + Tailwind UI (in progress, local only)
+│   └── src/
+│       ├── components/      # Sidebar, SearchView, ChatView
+│       └── lib/api.js       # API client for FastAPI backend
 ├── data/                    # Drop .txt / .pdf / .docx transcripts here
 ├── Dockerfile               # Container definition
 ├── docker-compose.yml       # Multi-service local orchestration
