@@ -569,6 +569,14 @@ def api_transcribe(file_bytes: bytes, filename: str, meeting_title: str, meeting
         return r.json()
     except Exception as e:
         return {"error": str(e)}
+    
+
+def api_summary(meeting_date: str) -> dict:
+    try:
+        r = requests.get(f"{API_BASE}/summary/{meeting_date}", headers=HEADERS, timeout=30)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── Session state ──────────────────────────────────────────────────
 if "history"       not in st.session_state: st.session_state.history       = []
@@ -644,13 +652,27 @@ with st.sidebar:
     meetings = api_meetings()
     if meetings:
         for m in meetings:
-            st.markdown(
-                f'<div class="meeting-item">'
-                f'<div class="meeting-item-title">{m["title"]}</div>'
-                f'<div class="meeting-item-date">{m["date"]}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            with st.expander(f"{m['title']} — {m['date']}"):
+                if st.button("View Summary", key=f"summary_{m['date']}_{m['title']}", use_container_width=True):
+                    with st.spinner("Generating summary..."):
+                        summary = api_summary(m["date"])
+                    if summary.get("status") == "success":
+                        if summary.get("key_decisions"):
+                            st.markdown("**Key Decisions**")
+                            for d in summary["key_decisions"]:
+                                st.markdown(f"- {d}")
+                        if summary.get("action_items"):
+                            st.markdown("**Action Items**")
+                            for a in summary["action_items"]:
+                                st.markdown(f"- {a}")
+                        if summary.get("open_questions"):
+                            st.markdown("**Open Questions**")
+                            for q in summary["open_questions"]:
+                                st.markdown(f"- {q}")
+                        if not any([summary.get("key_decisions"), summary.get("action_items"), summary.get("open_questions")]):
+                            st.markdown("_No structured content found._")
+                    else:
+                        st.error(summary.get("message", "Failed to load summary"))
     else:
         st.markdown('<div class="status-row">No meetings indexed.</div>', unsafe_allow_html=True)
 
