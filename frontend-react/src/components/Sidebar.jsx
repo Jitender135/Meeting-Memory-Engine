@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react"
-import { getHealth, getMeetings, postIngest, postTranscribe } from "../lib/api"
+import { getHealth, getMeetings, postIngest, postTranscribe, getSummary } from "../lib/api"
 
 export default function Sidebar() {
   const [health, setHealth] = useState(null)
   const [meetings, setMeetings] = useState([])
   const [loading, setLoading] = useState(false)
+
+  const [openSummary, setOpenSummary] = useState(null)
+  const [summaries, setSummaries] = useState({})
+  const [summaryLoading, setSummaryLoading] = useState(null)
 
   const [audioFile, setAudioFile] = useState(null)
   const [meetingTitle, setMeetingTitle] = useState("Recorded Meeting")
@@ -60,6 +64,22 @@ export default function Sidebar() {
     }
 
     setTranscribing(false)
+  }
+
+  async function toggleSummary(meetingDate) {
+    if (openSummary === meetingDate) {
+      setOpenSummary(null)
+      return
+    }
+
+    setOpenSummary(meetingDate)
+
+    if (!summaries[meetingDate]) {
+      setSummaryLoading(meetingDate)
+      const res = await getSummary(meetingDate)
+      setSummaries((prev) => ({ ...prev, [meetingDate]: res }))
+      setSummaryLoading(null)
+    }
   }
 
   const statusColor =
@@ -168,15 +188,72 @@ export default function Sidebar() {
           Indexed Meetings
         </p>
         <div className="space-y-1">
-          {meetings.map((m, i) => (
-            <div
-              key={i}
-              className="text-sm py-2 border-b border-ink-50 last:border-0"
-            >
-              <div className="font-medium text-ink-800">{m.title}</div>
-              <div className="text-xs text-ink-400 mt-0.5">{m.date}</div>
-            </div>
-          ))}
+          {meetings.map((m, i) => {
+            const isOpen   = openSummary === m.date
+            const summary  = summaries[m.date]
+            const isLoading = summaryLoading === m.date
+
+            return (
+              <div key={i} className="border-b border-ink-50 last:border-0">
+                <button
+                  onClick={() => toggleSummary(m.date)}
+                  className="w-full text-left py-2 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium text-ink-800 text-sm">{m.title}</div>
+                      <div className="text-xs text-ink-400 mt-0.5">{m.date}</div>
+                    </div>
+                    <span className={`text-ink-300 text-xs transition-transform ${isOpen ? "rotate-180" : ""}`}>
+                      ▾
+                    </span>
+                  </div>
+                </button>
+
+                {isOpen && (
+                  <div className="pb-3 pl-1 pr-1 text-xs text-ink-600 space-y-2">
+                    {isLoading && <p className="text-ink-400">Loading summary...</p>}
+
+                    {summary?.status === "success" && (
+                      <>
+                        {summary.key_decisions?.length > 0 && (
+                          <div>
+                            <p className="font-semibold text-ink-500 mb-1">Key Decisions</p>
+                            <ul className="list-disc pl-4 space-y-0.5">
+                              {summary.key_decisions.map((d, j) => <li key={j}>{d}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {summary.action_items?.length > 0 && (
+                          <div>
+                            <p className="font-semibold text-ink-500 mb-1">Action Items</p>
+                            <ul className="list-disc pl-4 space-y-0.5">
+                              {summary.action_items.map((a, j) => <li key={j}>{a}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {summary.open_questions?.length > 0 && (
+                          <div>
+                            <p className="font-semibold text-ink-500 mb-1">Open Questions</p>
+                            <ul className="list-disc pl-4 space-y-0.5">
+                              {summary.open_questions.map((q, j) => <li key={j}>{q}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {!summary.key_decisions?.length && !summary.action_items?.length && !summary.open_questions?.length && (
+                          <p className="text-ink-400">No structured content found.</p>
+                        )}
+                      </>
+                    )}
+
+                    {summary?.status === "error" && (
+                      <p className="text-red-600">{summary.message}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           {meetings.length === 0 && (
             <p className="text-sm text-ink-400">No meetings indexed.</p>
           )}
