@@ -1,5 +1,5 @@
-const API_BASE = "http://localhost:8000";
-const API_KEY  = "mme-secret-2024";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_KEY  = import.meta.env.VITE_API_KEY  || "mme-secret-2024";
 
 const headers = {
   "X-API-Key": API_KEY,
