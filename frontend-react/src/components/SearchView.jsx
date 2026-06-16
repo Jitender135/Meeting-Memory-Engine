@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { postQuery, postActionItems } from "../lib/api"
+import { SkeletonAnswer } from "./Skeleton"
 
 export default function SearchView() {
   const [question, setQuestion] = useState("")
@@ -53,7 +54,9 @@ export default function SearchView() {
           Clear
         </button>
       </div>
-
+      {/* Loading skeleton */}
+      {loading && <SkeletonAnswer />}
+      
       {/* Answer */}
       {result && (
         <div className="mt-8">

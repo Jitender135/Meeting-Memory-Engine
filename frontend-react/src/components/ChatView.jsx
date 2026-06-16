@@ -101,7 +101,7 @@ export default function ChatView() {
       </div>
 
       {/* Input */}
-      <div className="sticky bottom-6 flex gap-3 items-end bg-ink-50 pt-2">
+      <div className="mt-6 flex gap-3 items-end border-t border-ink-100 pt-4">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
