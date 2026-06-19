@@ -37,7 +37,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from loguru import logger
 
-from pipeline.ingest      import ingest_all, DATA_PATH, CHROMA_PATH
+from pipeline.ingest           import ingest_all, DATA_PATH, CHROMA_PATH
+from pipeline.experiment_tracker import log_rag_query
 from pipeline.transcriber import transcribe_audio, save_transcript, SUPPORTED_AUDIO_FORMATS
 from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query, get_meeting_summary
 from pipeline.evaluator import evaluate_pipeline
@@ -229,9 +230,7 @@ def ingest_transcripts(request: Request) -> IngestResponse:
 )
 @limiter.limit("10/minute")
 def query_meetings(request: Request, body: QueryRequest) -> QueryResponse:
-    """
-    Core RAG endpoint — hybrid search + temporal filter + cited answer.
-    """
+    """Core RAG endpoint — hybrid search + temporal filter + cited answer."""
     logger.info(f"POST /query | question={body.question[:60]}")
     try:
         result = rag_query(
@@ -244,11 +243,37 @@ def query_meetings(request: Request, body: QueryRequest) -> QueryResponse:
         logger.error(f"Query error: {e}")
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
+    try:
+        contexts = [
+            s.get("excerpt", s.get("text", s.get("content", "")))
+            for s in result["sources"]
+        ]
+        raw_eval = evaluate_pipeline(
+            question=body.question,
+            answer=result["answer"],
+            contexts=contexts,
+        )
+        eval_scores = {
+            "faithfulness":      float(raw_eval.get("faithfulness",      {}).get("score", 0.0)),
+            "answer_relevancy":  float(raw_eval.get("answer_relevancy",  {}).get("score", 0.0)),
+            "context_precision": float(raw_eval.get("context_precision", {}).get("score", 0.0)),
+        }
+        log_rag_query(
+            question=body.question,
+            answer=result["answer"],
+            sources=result["sources"],
+            eval_scores=eval_scores,
+            date_from=str(body.date_from) if body.date_from else None,
+            date_to=str(body.date_to)     if body.date_to   else None,
+            top_k=body.top_k,
+        )
+    except Exception as e:
+        logger.warning(f"MLflow tracking skipped: {e}")
+
     return QueryResponse(
         answer=result["answer"],
         sources=[SourceDocument(**s) for s in result["sources"]],
     )
-
 
 # ─────────────────────────────────────────────────────────────────
 # POST /action-items
@@ -316,10 +341,7 @@ def evaluate_response(request: Request, body: EvaluateRequest) -> EvaluationResp
 )
 @limiter.limit("10/minute")
 def chat(request: Request, body: ConversationalQueryRequest) -> QueryResponse:
-    """
-    Multi-turn conversational RAG with memory.
-    Stateless backend — client sends full history on every request.
-    """
+    """Multi-turn conversational RAG with memory."""
     logger.info(f"POST /chat | question={body.question[:60]} | history_turns={len(body.history)}")
     try:
         result = conversational_query(
@@ -332,6 +354,33 @@ def chat(request: Request, body: ConversationalQueryRequest) -> QueryResponse:
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+    try:
+        contexts = [
+            s.get("excerpt", s.get("text", s.get("content", "")))
+            for s in result["sources"]
+        ]
+        raw_eval = evaluate_pipeline(
+            question=body.question,
+            answer=result["answer"],
+            contexts=contexts,
+        )
+        eval_scores = {
+            "faithfulness":      float(raw_eval.get("faithfulness",      {}).get("score", 0.0)),
+            "answer_relevancy":  float(raw_eval.get("answer_relevancy",  {}).get("score", 0.0)),
+            "context_precision": float(raw_eval.get("context_precision", {}).get("score", 0.0)),
+        }
+        log_rag_query(
+            question=body.question,
+            answer=result["answer"],
+            sources=result["sources"],
+            eval_scores=eval_scores,
+            date_from=str(body.date_from) if body.date_from else None,
+            date_to=str(body.date_to)     if body.date_to   else None,
+            top_k=body.top_k,
+        )
+    except Exception as e:
+        logger.warning(f"MLflow tracking skipped: {e}")
 
     return QueryResponse(
         answer=result["answer"],
