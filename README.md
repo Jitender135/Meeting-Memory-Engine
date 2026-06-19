@@ -1,4 +1,5 @@
 # Meeting Memory Engine
+![CI](https://github.com/Jitender135/Meeting-Memory-Engine/actions/workflows/ci.yml/badge.svg)
 
 A production-ready **Temporal RAG (Retrieval-Augmented Generation)** system that lets you query past meeting transcripts using natural language — with cited, time-accurate, grounded answers.
 

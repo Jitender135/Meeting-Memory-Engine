@@ -652,7 +652,11 @@ def get_meeting_summary(meeting_date: str) -> dict:
     from datetime import datetime
 
     try:
-        ts = int(datetime.strptime(meeting_date, "%Y-%m-%d").timestamp())
+        dt = datetime.strptime(meeting_date, "%Y-%m-%d")
+        # Windows timestamp range: 1970-2038. Reject dates outside this.
+        if dt.year < 1970 or dt.year > 2037:
+            return {"status": "error", "message": f"No meeting found for date {meeting_date}."}
+        ts = int(dt.timestamp())
     except ValueError:
         return {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD."}
 
