@@ -32,6 +32,22 @@ AUTH_HEADER = {"X-API-Key": API_KEY}
 
 
 # ─────────────────────────────────────────────────────────────────
+# FIXTURES
+# ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="session", autouse=True)
+def ingest_data():
+    """
+    Ingest transcripts once before all tests run.
+    Required because CI starts with an empty ChromaDB.
+    scope="session" means this runs once for the entire test suite.
+    """
+    r = client.post("/ingest", headers=AUTH_HEADER)
+    assert r.status_code in (200, 201), f"Ingest failed: {r.json()}"
+    yield
+    # No teardown needed — ChromaDB is ephemeral in CI
+
+# ─────────────────────────────────────────────────────────────────
 # HEALTH
 # ─────────────────────────────────────────────────────────────────
 
