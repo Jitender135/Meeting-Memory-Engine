@@ -5,9 +5,9 @@
 A production-ready **Temporal RAG (Retrieval-Augmented Generation)** system that lets you query past meeting transcripts using natural language — with cited, time-accurate, grounded answers.
 
 **Live App (React):** https://meeting-memory-engine.vercel.app
-**Live App (Streamlit):** https://meeting-memory-engine-n5iyrh3cmnjkvd5scvnnpn.streamlit.app
-**Live API:** https://meeting-memory-engine.onrender.com/docs
-**GitHub:** https://github.com/Jitender135/Meeting-Memory-Engine
+<br>**Live App (Streamlit):** https://meeting-memory-engine-n5iyrh3cmnjkvd5scvnnpn.streamlit.app
+<br>**Live API:** https://meeting-memory-engine.onrender.com/docs
+<br>**GitHub:** https://github.com/Jitender135/Meeting-Memory-Engine
 
 > Note: Backend hosted on Render free tier. If the API is sleeping, click "Re-index transcripts" in the sidebar and wait ~30 seconds. UptimeRobot pings the server every 5 minutes to minimise this.
 
@@ -303,6 +303,9 @@ To validate the current configuration rather than assume it, 8 RAG configuration
 
 ![MLflow faithfulness and context precision comparison across 8 configs](docs/images/mlflow_faithfulness_comparison.png)
 *Faithfulness ranges from 0.71 (BM25-only) to 0.92 (hybrid, chunk=500, top_k=3) — the production configuration wins on every metric tracked.*
+
+![MLflow answer length, relevancy, and average eval score comparison across 8 configs](docs/images/mlflow_eval_scores.png)
+*Answer relevancy and average eval score follow the same pattern — hybrid retrieval at chunk_size=500 consistently outperforms semantic-only and BM25-only configurations.*
 
 Run the dashboard locally:
 
