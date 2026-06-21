@@ -40,7 +40,6 @@ from loguru import logger
 from pipeline.ingest           import ingest_all, DATA_PATH, CHROMA_PATH
 from pipeline.experiment_tracker import log_rag_query
 from pipeline.transcriber import transcribe_audio, transcribe_audio_with_segments, save_transcript, SUPPORTED_AUDIO_FORMATS
-from pipeline.diarizer    import diarize_audio, merge_transcript_with_speakers
 from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query, get_meeting_summary
 from pipeline.evaluator import evaluate_pipeline
 
@@ -443,7 +442,10 @@ def transcribe_meeting(
             transcript_text   = transcript_result["text"]
 
             # Speaker diarization — best-effort, falls back to plain text on failure
+            # Imported lazily here (not at module level) so Render's 512MB free
+            # tier can start the server without loading torch/pyannote upfront
             try:
+                from pipeline.diarizer import diarize_audio, merge_transcript_with_speakers
                 speaker_segments = diarize_audio(tmp_audio_path)
                 if len(speaker_segments) > 1:
                     # Multiple speakers detected — use speaker-labeled transcript
