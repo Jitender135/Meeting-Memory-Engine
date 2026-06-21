@@ -30,6 +30,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           APP_API_KEY: ${{ secrets.APP_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           cd backend
           pytest tests/ -v --tb=short
