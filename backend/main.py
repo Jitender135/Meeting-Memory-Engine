@@ -39,7 +39,8 @@ from loguru import logger
 
 from pipeline.ingest           import ingest_all, DATA_PATH, CHROMA_PATH
 from pipeline.experiment_tracker import log_rag_query
-from pipeline.transcriber import transcribe_audio, save_transcript, SUPPORTED_AUDIO_FORMATS
+from pipeline.transcriber import transcribe_audio, transcribe_audio_with_segments, save_transcript, SUPPORTED_AUDIO_FORMATS
+from pipeline.diarizer    import diarize_audio, merge_transcript_with_speakers
 from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query, get_meeting_summary
 from pipeline.evaluator import evaluate_pipeline
 
@@ -428,7 +429,36 @@ def transcribe_meeting(
 
     try:
         audio_bytes = file.file.read()
-        transcript  = transcribe_audio(audio_bytes, file.filename)
+
+        # Save audio to a temp file — diarization needs a file path
+        import tempfile
+        suffix_for_temp = Path(file.filename).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix_for_temp) as tmp:
+            tmp.write(audio_bytes)
+            tmp_audio_path = tmp.name
+
+        try:
+            # Whisper transcription with segment timestamps
+            transcript_result = transcribe_audio_with_segments(audio_bytes, file.filename)
+            transcript_text   = transcript_result["text"]
+
+            # Speaker diarization — best-effort, falls back to plain text on failure
+            try:
+                speaker_segments = diarize_audio(tmp_audio_path)
+                if len(speaker_segments) > 1:
+                    # Multiple speakers detected — use speaker-labeled transcript
+                    transcript = merge_transcript_with_speakers(
+                        transcript_result["segments"],
+                        speaker_segments,
+                    )
+                else:
+                    # Single speaker — plain text is cleaner
+                    transcript = transcript_text
+            except Exception as diarize_error:
+                logger.warning(f"Diarization skipped: {diarize_error}")
+                transcript = transcript_text
+        finally:
+            os.unlink(tmp_audio_path)
 
         save_result = save_transcript(
             transcript_text=transcript,

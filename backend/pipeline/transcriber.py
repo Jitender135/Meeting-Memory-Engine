@@ -32,17 +32,10 @@ def get_whisper_client() -> Groq:
 def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
     """
     Transcribe audio bytes to text using Groq Whisper.
-
-    Args:
-        audio_bytes — raw audio file content
-        filename    — original filename (used for format detection)
-
-    Returns:
-        Transcribed text as a string.
+    Kept for backward compatibility — returns plain text only.
     """
     client = get_whisper_client()
 
-    # Groq SDK expects a file-like tuple: (filename, bytes)
     transcription = client.audio.transcriptions.create(
         file=(filename, audio_bytes),
         model="whisper-large-v3",
@@ -50,6 +43,50 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
     )
 
     return transcription.strip()
+
+
+def transcribe_audio_with_segments(audio_bytes: bytes, filename: str) -> dict:
+    """
+    Transcribe audio bytes to text using Groq Whisper, returning
+    both the full text and segment-level timestamps.
+
+    Why this exists separately from transcribe_audio():
+        verbose_json is needed for speaker diarization (timestamp
+        merging) but costs slightly more response parsing overhead.
+        Keeping both lets callers choose based on whether they need
+        diarization or just plain text.
+
+    Args:
+        audio_bytes — raw audio file content
+        filename    — original filename (used for format detection)
+
+    Returns:
+        {
+            "text": str,
+            "segments": [{"start": float, "end": float, "text": str}, ...]
+        }
+    """
+    client = get_whisper_client()
+
+    transcription = client.audio.transcriptions.create(
+        file=(filename, audio_bytes),
+        model="whisper-large-v3",
+        response_format="verbose_json",
+    )
+
+    segments = [
+        {
+            "start": seg.start if hasattr(seg, "start") else seg["start"],
+            "end":   seg.end   if hasattr(seg, "end")   else seg["end"],
+            "text":  (seg.text if hasattr(seg, "text") else seg["text"]).strip(),
+        }
+        for seg in transcription.segments
+    ]
+
+    return {
+        "text":     transcription.text.strip(),
+        "segments": segments,
+    }
 
 
 def save_transcript(
