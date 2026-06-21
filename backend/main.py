@@ -38,7 +38,6 @@ from slowapi.errors import RateLimitExceeded
 from loguru import logger
 
 from pipeline.ingest           import ingest_all, DATA_PATH, CHROMA_PATH
-from pipeline.experiment_tracker import log_rag_query
 from pipeline.transcriber import transcribe_audio, transcribe_audio_with_segments, save_transcript, SUPPORTED_AUDIO_FORMATS
 from pipeline.retriever  import query as rag_query, extract_action_items, conversational_query, get_meeting_summary
 from pipeline.evaluator import evaluate_pipeline
@@ -244,6 +243,7 @@ def query_meetings(request: Request, body: QueryRequest) -> QueryResponse:
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
     try:
+        from pipeline.experiment_tracker import log_rag_query
         contexts = [
             s.get("excerpt", s.get("text", s.get("content", "")))
             for s in result["sources"]
@@ -356,6 +356,7 @@ def chat(request: Request, body: ConversationalQueryRequest) -> QueryResponse:
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
     try:
+        from pipeline.experiment_tracker import log_rag_query
         contexts = [
             s.get("excerpt", s.get("text", s.get("content", "")))
             for s in result["sources"]
