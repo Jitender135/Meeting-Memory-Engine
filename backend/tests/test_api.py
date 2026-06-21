@@ -15,6 +15,7 @@ Run with:
 """
 
 import os
+import time
 import pytest
 from fastapi.testclient import TestClient
 
@@ -46,6 +47,19 @@ def ingest_data():
     assert r.status_code in (200, 201), f"Ingest failed: {r.json()}"
     yield
     # No teardown needed — ChromaDB is ephemeral in CI
+
+
+@pytest.fixture(autouse=True)
+def rate_limit_pause():
+    """
+    Small delay between every test to stay under Groq's free-tier
+    TPM (tokens-per-minute) rate limit. Each /query or /chat call
+    now also triggers an LLM-as-judge evaluation call for MLflow
+    logging, roughly doubling token usage per test — without this
+    pause, CI hits 429 errors under the 6000 TPM free-tier limit.
+    """
+    yield
+    time.sleep(2)
 
 # ─────────────────────────────────────────────────────────────────
 # HEALTH
