@@ -40,6 +40,13 @@ Audio Recording (mp3/wav/m4a)        Transcripts (TXT / PDF / DOCX)
 │   (whisper-large-v3, free API)  │           │
 └───────────────┬─────────────────┘           │
                 │                             │
+                ▼                             │
+┌─────────────────────────────────┐           │
+│   pyannote Speaker Diarization  │           │
+│   + Timestamp Merge             │           │  Multi-speaker audio only —
+│                                 │           │  single-speaker falls back
+└───────────────┬─────────────────┘           │  to plain text automatically
+                │                             │
                 └──────────────┬──────────────┘
                                 ▼
                 ┌─────────────────────────────────┐
@@ -109,6 +116,7 @@ Audio Recording (mp3/wav/m4a)        Transcripts (TXT / PDF / DOCX)
 | Keyword Search | BM25 via rank-bm25 | Catches exact matches semantic search misses |
 | LLM | Groq — Llama 3.1 8b Instant | Fast free inference, 8192 token context |
 | Audio Transcription | Groq Whisper `whisper-large-v3` | Free, API-based, near-perfect quality |
+| Speaker Diarization | pyannote-audio 3.1 | Identifies who spoke when, merged with Whisper timestamps |
 | API Layer | FastAPI + Pydantic | REST endpoints, auto OpenAPI docs, request validation |
 | Auth | API Key Header (X-API-Key) | Protects all pipeline endpoints |
 | Rate Limiting | slowapi | Per-endpoint limits, per IP |
@@ -134,6 +142,7 @@ Audio Recording (mp3/wav/m4a)        Transcripts (TXT / PDF / DOCX)
 
 ### Advanced Features
 - **Audio Transcription** — upload a meeting recording (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.webm`) and it's transcribed via Groq Whisper, saved as a transcript, and auto-ingested. Record meeting → upload → query immediately.
+- **Speaker Diarization** — uploaded audio is processed through pyannote-audio to identify *who spoke when*, then merged with Whisper's segment-level timestamps to produce a speaker-labeled transcript (`SPEAKER_00: ...`, `SPEAKER_01: ...`). This moves action-item attribution from text pattern matching on names to genuine speaker-grounded retrieval. Single-speaker recordings automatically fall back to plain text — labels only add value with real multi-speaker audio.
 - **Meeting Summaries** — per-meeting structured summary extracting key decisions, action items, and open questions. Expandable in the sidebar per meeting.
 - **Action Item Extractor** — focused LLM call extracts structured action items (owner, task, due date, meeting) across all meetings. Returns as a clean table.
 - **Conversational Memory** — multi-turn chat mode with stateless history pattern. Ask "Who was responsible for that?" and the LLM resolves references using conversation history.
@@ -172,7 +181,7 @@ Audio Recording (mp3/wav/m4a)        Transcripts (TXT / PDF / DOCX)
 | POST | `/action-items` | Required | 10/min | Extract structured action items |
 | POST | `/evaluate` | Required | 10/min | Evaluate RAG response quality |
 | POST | `/chat` | Required | 10/min | Multi-turn conversational query |
-| POST | `/transcribe` | Required | 5/min | Upload audio — Whisper transcription + auto-ingest |
+| POST | `/transcribe` | Required | 5/min | Upload audio — Whisper transcription, diarization, + auto-ingest |
 
 ### POST /query — Example
 
@@ -238,7 +247,7 @@ auto_ingest: true
 {
   "status": "success",
   "filename": "meeting_2024_12_05.txt",
-  "transcript": "Okay team, let's go over today's action items...",
+  "transcript": "SPEAKER_00: Okay team, let's go over today's action items.\nSPEAKER_01: I'll have that done by Friday.",
   "ingested": true,
   "chunks_added": 13
 }
@@ -278,6 +287,12 @@ Stateful server-side memory breaks horizontal scaling. Passing history from the 
 **Why React + Vite + Tailwind v4 for the frontend?**
 Tailwind v4 uses CSS variables natively — perfect for dark mode without JavaScript class juggling. Vite gives instant HMR. React gives component reusability across Search, Chat, and Audio upload flows.
 
+**Why pyannote-audio for diarization instead of a hosted diarization API?**
+pyannote-audio is the open-source standard for speaker diarization, runs locally with no per-minute cost, and integrates directly with the existing Whisper transcription step. The trade-off is heavier dependencies (torch, ~300MB of model weights) versus a hosted API's lighter footprint — acceptable for a project already running torch-based components, and avoids adding another paid service.
+
+**Why fall back to plain text for single-speaker audio?**
+Labeling every line `SPEAKER_00:` when there's genuinely one speaker adds visual noise without adding information. The merge step only applies speaker labels when more than one distinct speaker is detected — diarization earns its place in the transcript rather than being applied unconditionally.
+
 ---
 
 ## Experiment Tracking
@@ -299,15 +314,11 @@ To validate the current configuration rather than assume it, 8 RAG configuration
 
 **Result:** chunk_size=500, top_k=3, hybrid retrieval scored highest across all three metrics — confirming the production configuration rather than assuming it from intuition. Hybrid retrieval beat semantic-only and BM25-only at every chunk size tested; top_k=3 beat both top_k=2 (less context) and top_k=5 (more noise diluting precision).
 
-**Result:** chunk_size=500, top_k=3, hybrid retrieval scored highest across all three metrics — confirming the production configuration rather than assuming it from intuition. Hybrid retrieval beat semantic-only and BM25-only at every chunk size tested; top_k=3 beat both top_k=2 (less context) and top_k=5 (more noise diluting precision).
-
 ![MLflow faithfulness and context precision comparison across 8 configs](docs/images/mlflow_faithfulness_comparison.png)
 *Faithfulness ranges from 0.71 (BM25-only) to 0.92 (hybrid, chunk=500, top_k=3) — the production configuration wins on every metric tracked.*
 
 ![MLflow answer length, relevancy, and average eval score comparison across 8 configs](docs/images/mlflow_eval_scores.png)
 *Answer relevancy and average eval score follow the same pattern — hybrid retrieval at chunk_size=500 consistently outperforms semantic-only and BM25-only configurations.*
-
-Run the dashboard locally:
 
 Run the dashboard locally:
 ```bash
@@ -353,6 +364,7 @@ Create a `.env` file in the project root:
 GROQ_API_KEY=your_groq_api_key_here
 JINA_API_KEY=your_jina_api_key_here
 APP_API_KEY=your_secret_key_here
+HF_TOKEN=your_huggingface_token_here
 ```
 
 | Key | Where to get it | Cost |
@@ -360,6 +372,7 @@ APP_API_KEY=your_secret_key_here
 | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Free |
 | `JINA_API_KEY` | [jina.ai](https://jina.ai) | Free — 1M tokens/month |
 | `APP_API_KEY` | Any string you choose | — |
+| `HF_TOKEN` | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — required for speaker diarization; accept terms on `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0` first | Free |
 
 ### 5. Add meeting transcripts
 
@@ -367,7 +380,7 @@ Drop files into `data/`. Supported: `.txt`, `.pdf`, `.docx`
 
 Required filename format: `meeting_YYYY_MM_DD.ext`
 
-Or upload audio directly through the React UI — transcribed and ingested automatically.
+Or upload audio directly through the React UI — transcribed, diarized, and ingested automatically.
 
 ### 6. Ingest transcripts
 
@@ -426,6 +439,7 @@ meeting-memory-engine/
 │   │   ├── retriever.py     # Hybrid search, temporal RAG, summaries, chat memory
 │   │   ├── evaluator.py     # LLM-as-judge — faithfulness, relevance, precision
 │   │   ├── transcriber.py   # Audio transcription via Groq Whisper
+│   │   ├── diarizer.py            # Speaker diarization (pyannote-audio) + transcript merging
 │   │   ├── experiment_tracker.py  # MLflow run logging per query
 │   │   └── run_experiments.py     # Compares 8 RAG configurations
 │   ├── main.py              # FastAPI — 9 endpoints, auth, rate limiting, auto-ingest
@@ -462,6 +476,7 @@ meeting-memory-engine/
 - **Shared API key** — single key for all users. Multi-tenant auth would need user management (out of scope).
 - **Hallucination risk** — mitigated by citation requirement in prompt and low temperature.
 - **Re-ingest on transcribe** — `/transcribe` re-ingests all transcripts. Fine at current scale; incremental indexing needed at higher volume.
+- **Diarization not deployed to Render** — pyannote-audio's dependencies (torch, ~300MB model weights) exceed what's practical on Render's free tier. Diarization runs locally and is demonstrated/tested rather than live-deployed; production deployment would need a paid tier or a separate lightweight inference service.
 
 ---
 
@@ -469,4 +484,4 @@ meeting-memory-engine/
 
 Built by [Jitender Singh](https://github.com/Jitender135)
 
-**Stack:** LangChain · ChromaDB · Jina AI · Groq (LLM + Whisper) · MLflow · FastAPI · React · Tailwind v4 · Streamlit · Docker · pytest · GitHub Actions · Render · Vercel · Streamlit Cloud
+**Stack:** LangChain · ChromaDB · Jina AI · Groq (LLM + Whisper) · pyannote-audio · MLflow · FastAPI · React · Tailwind v4 · Streamlit · Docker · pytest · GitHub Actions · Render · Vercel · Streamlit Cloud
